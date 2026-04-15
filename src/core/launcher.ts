@@ -100,6 +100,9 @@ export default class Launcher {
         middlewareService.register('Scene', SceneMiddleware);
         await sceneConfigInstance.init();
 
+        const { Rpc } = await import('./scene/main-process/rpc');
+        await Rpc.startup();
+
         const browserPath = process.platform === 'win32'
             ? 'start'
             : process.platform === 'darwin'

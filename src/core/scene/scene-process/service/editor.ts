@@ -15,8 +15,7 @@ import {
 } from '../../common';
 import { PrefabEditor, SceneEditor } from './editors';
 import { IAssetInfo } from '../../../assets/@types/public';
-import { parseCommandLineArgs } from '../utils';
-import { serviceManager } from './service-manager';
+import { Rpc } from '../rpc';
 
 /**
  * EditorAsset - 统一的编辑器管理入口
@@ -54,19 +53,6 @@ export class EditorService extends BaseService<IEditorEvents> implements IEditor
             this.lockPromise = null;
             this.lockResolve = null;
         }
-    }
-
-    private async queryAssetInfo(urlOrUUID: string): Promise<IAssetInfo | null> {
-        const serverURL = serviceManager.getServerUrl();
-        try {
-            const res = await fetch(`${serverURL}/query-asset-info/${urlOrUUID}`);
-            if (res.ok) {
-                return await res.json() as IAssetInfo;
-            }
-        } catch (error) {
-            console.warn(`[Scene] queryAssetInfo failed:`, error);
-        }
-        return null;
     }
 
     async waitLocks() {
@@ -125,7 +111,7 @@ export class EditorService extends BaseService<IEditorEvents> implements IEditor
     async open(params: IOpenOptions): Promise<IScene | INode> {
         const { urlOrUUID, simpleNode = true } = params;
 
-        const assetInfo = await this.queryAssetInfo(urlOrUUID);
+        const assetInfo = await Rpc.getInstance().request('assetManager', 'queryAssetInfo', [urlOrUUID]);
         if (!assetInfo) {
             throw new Error(`通过 ${urlOrUUID} 无法打开，查询不到该资源信息`);
         }
@@ -135,7 +121,7 @@ export class EditorService extends BaseService<IEditorEvents> implements IEditor
             if (currentEditor) {
                 try {
                     // 关闭当前场景
-                    const assetInfo = await this.queryAssetInfo(this.currentEditorUuid);
+                    const assetInfo = await Rpc.getInstance().request('assetManager', 'queryAssetInfo', [this.currentEditorUuid]);
                     if (assetInfo) {
                         await currentEditor.close();
                     }
@@ -190,7 +176,7 @@ export class EditorService extends BaseService<IEditorEvents> implements IEditor
         try {
             if (!urlOrUUID) return true;
 
-            const assetInfo = await this.queryAssetInfo(urlOrUUID);
+            const assetInfo = await Rpc.getInstance().request('assetManager', 'queryAssetInfo', [urlOrUUID]);
             if (!assetInfo) {
                 throw new Error(`通过 ${urlOrUUID} 请求资源失败`);
             }
@@ -226,7 +212,7 @@ export class EditorService extends BaseService<IEditorEvents> implements IEditor
                 throw new Error('当前没有打开任何编辑器');
             }
 
-            const assetInfo = await this.queryAssetInfo(urlOrUUID);
+            const assetInfo = await Rpc.getInstance().request('assetManager', 'queryAssetInfo', [urlOrUUID]);
             if (!assetInfo) {
                 throw new Error(`通过 ${urlOrUUID} 请求资源失败`);
             }
@@ -264,7 +250,7 @@ export class EditorService extends BaseService<IEditorEvents> implements IEditor
                 return ReloadResult.NO_EDITOR;
             }
 
-            const assetInfo = await this.queryAssetInfo(urlOrUUID);
+            const assetInfo = await Rpc.getInstance().request('assetManager', 'queryAssetInfo', [urlOrUUID]);
             if (!assetInfo) {
                 console.warn(`通过 ${urlOrUUID} 请求资源失败`);
                 this._isReloading = false;

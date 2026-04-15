@@ -131,17 +131,14 @@ export class ScriptService extends BaseService<IScriptEvents> implements IScript
                     classConstructor, 'i18n:menu.custom_script/' + className, -1);
             }
         });
-        const serverUrl = serviceManager.getServerUrl();
-        const serialPromise = await fetch(`${serverUrl}/programming/getPackerDriverLoaderContext/editor`);
-        const serializedPackLoaderContext = await serialPromise.json();
+        const serializedPackLoaderContext = await Rpc.getInstance().request('programming', 'getPackerDriverLoaderContext', ['editor']);
         if (!serializedPackLoaderContext) {
             throw new Error('packer-driver/get-loader-context is not defined');
         }
         const quickPackLoaderContext = QuickPackLoaderContext.deserialize(serializedPackLoaderContext);
 
         const { loadDynamic } = await import('cc/preload');
-        const moduleMapPromise = await fetch(`${serverUrl}/programming/queryCCEModuleMap`);
-        const cceModuleMap = await moduleMapPromise.json();
+        const cceModuleMap = await Rpc.getInstance().request('programming', 'queryCCEModuleMap');
         this._executor = await Executor.create({
             // @ts-ignore
             importEngineMod: async (id) => {
@@ -278,29 +275,11 @@ export class ScriptService extends BaseService<IScriptEvents> implements IScript
      * @private
      */
     private async _syncPluginScriptList() {
-        const isBrowser = typeof window !== 'undefined' && typeof window.document !== 'undefined';
-        if (isBrowser) {
-            try {
-                const serverUrl = serviceManager.getServerUrl();
-                const res = await fetch(`${serverUrl}/assetManager/querySortedPlugins`);
-                if (res.ok) {
-                    const pluginScripts = await res.json();
-                    this._executor.setPluginScripts(pluginScripts || []);
-                } else {
-                    this._executor.setPluginScripts([]);
-                }
-            } catch (err) {
-                console.error('Failed to fetch plugin scripts', err);
-                this._executor.setPluginScripts([]);
-            }
-            return;
-        }
-
         return Promise.resolve(Rpc.getInstance().request('assetManager', 'querySortedPlugins', [{
             loadPluginInEditor: true,
         }]))
             .then((pluginScripts) => {
-                this._executor.setPluginScripts(pluginScripts);
+                this._executor.setPluginScripts(pluginScripts || []);
             })
             .catch((reason) => {
                 console.error(reason);

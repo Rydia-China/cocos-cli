@@ -1,4 +1,5 @@
 import * as EditorExtends from '../../engine/editor-extends';
+import { Rpc } from './rpc';
 import { serviceManager } from './service/service-manager';
 import { Service as DecoratorService } from './service/core/decorator';
 import './service';
@@ -79,6 +80,7 @@ export async function startup(options: {
     if (EditorExtends.init) {
         await EditorExtends.init();
     }
+    await Rpc.startup({ serverURL });
 
     cc.physics.selector.runInEditor = true;
     await cc.game.init(config);

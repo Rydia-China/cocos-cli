@@ -46,27 +46,6 @@ export default {
             },
         },
         {
-            url: '/programming/getPackerDriverLoaderContext/editor',
-            async handler(req: Request, res: Response, next: NextFunction) {
-                const { default: scripting } = await import('../../core/scripting');
-                res.json(scripting.getPackerDriverLoaderContext('editor'));
-            },
-        },
-        {
-            url: '/programming/queryCCEModuleMap',
-            async handler(req: Request, res: Response, next: NextFunction) {
-                const { default: scripting } = await import('../../core/scripting');
-                res.json(scripting.queryCCEModuleMap());
-            },
-        },
-        {
-            url: '/assetManager/querySortedPlugins',
-            async handler(req: Request, res: Response) {
-                const { assetManager } = await import('../assets');
-                res.json(assetManager.querySortedPlugins({ loadPluginInEditor: true }));
-            },
-        },
-        {
             url: '/scripting/engine/modules',
             async handler(req: Request, res: Response) {
                 const { Engine } = await import('../engine');

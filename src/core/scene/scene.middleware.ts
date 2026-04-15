@@ -104,94 +104,104 @@ export default {
             // then fall back to library directories on disk
             url: '/:dir/:uuid/:nativeName.:ext',
             async handler(req: Request, res: Response, next: NextFunction) {
-                if (req.params.dir === 'build' || req.params.dir === 'mcp' || req.params.dir === 'static' || req.params.dir === 'scripting') {
+                if (req.params.dir === 'build' || req.params.dir === 'mcp') {
                     return next();
                 }
-                try {
-                    const { uuid, ext, nativeName } = req.params;
-                    const { assetManager } = await import('../assets');
-                    const assetInfo = assetManager.queryAssetInfo(uuid);
-                    const filePath = assetInfo && assetInfo.library[`${nativeName}.${ext}`];
-                    if (!filePath || !(await fse.pathExists(filePath))) {
-                        return next();
-                    }
-                    const content = await fse.readFile(filePath);
-                    const mimeMap: Record<string, string> = { '.json': 'application/json', '.bin': 'application/octet-stream', '.cconb': 'application/octet-stream' };
-                    res.setHeader('Content-Type', mimeMap[`.${ext}`] || 'application/octet-stream');
-                    res.status(200).send(content);
-                } catch (err) {
-                    console.error(`[Scene] Error serving asset ${req.url}:`, err);
-                    next(err);
+                const { uuid, ext, nativeName } = req.params;
+                const { assetManager } = await import('../assets');
+                const assetInfo = assetManager.queryAssetInfo(uuid);
+                const filePath = assetInfo && assetInfo.library[`${nativeName}.${ext}`];
+                if (!filePath) {
+                    console.warn(`Asset not found: ${req.url}`);
+                    return res.status(404).json({
+                        error: 'Asset not found',
+                        requested: req.url,
+                        uuid,
+                        file: `${nativeName}.${ext}`
+                    });
                 }
+
+                const isBrowser = !!(req.headers['accept']?.includes('text/html') || 
+                                   req.headers['sec-ch-ua'] || 
+                                   req.query.isBrowser === 'true');
+
+                if (isBrowser) {
+                    const content = await fse.readFile(filePath);
+                    const extname = path.extname(filePath);
+                    const mimeMap: Record<string, string> = { 
+                        '.json': 'application/json', 
+                        '.bin': 'application/octet-stream', 
+                        '.cconb': 'application/octet-stream',
+                        '.wasm': 'application/wasm',
+                        '.png': 'image/png',
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg'
+                    };
+                    res.setHeader('Content-Type', mimeMap[extname] || 'application/octet-stream');
+                    return res.status(200).send(content);
+                }
+
+                res.status(200).send(filePath || req.url);
             },
         },
         {
-            // Serve library assets by UUID
             url: '/:dir/:uuid.:ext',
-            async handler(req: Request, res: Response, next: NextFunction) {
+            async handler(req: Request, res: Response) {
                 const { uuid, ext } = req.params;
-                if (req.params.dir === 'build' || req.params.dir === 'mcp' || req.params.dir === 'static' || req.params.dir === 'scripting') {
-                    return next();
+                const { assetManager } = await import('../assets');
+                const assetInfo = assetManager.queryAssetInfo(uuid);
+                const filePath = assetInfo && assetInfo.library[`.${ext}`];
+                if (!filePath) {
+                    console.warn(`Asset not found: ${req.url}`);
+                    return res.status(404).json({
+                        error: 'Asset not found',
+                        requested: req.url,
+                        uuid,
+                    });
                 }
-                try {
-                    const { assetManager } = await import('../assets');
-                    const assetInfo = assetManager.queryAssetInfo(uuid);
-                    const filePath = assetInfo && assetInfo.library[`.${ext}`];
-                    if (!filePath || !(await fse.pathExists(filePath))) {
-                        return next();
-                    }
+
+                const isBrowser = !!(req.headers['accept']?.includes('text/html') || 
+                                   req.headers['sec-ch-ua'] || 
+                                   req.query.isBrowser === 'true');
+
+                if (isBrowser) {
                     const content = await fse.readFile(filePath);
-                    const mimeMap: Record<string, string> = { '.json': 'application/json', '.bin': 'application/octet-stream', '.cconb': 'application/octet-stream' };
-                    res.setHeader('Content-Type', mimeMap[`.${ext}`] || 'application/octet-stream');
-                    res.status(200).send(content);
-                } catch (err) {
-                    console.error(`[Scene] Error serving asset ${req.url}:`, err);
-                    next(err);
+                    const extname = path.extname(filePath);
+                    const mimeMap: Record<string, string> = { 
+                        '.json': 'application/json', 
+                        '.bin': 'application/octet-stream', 
+                        '.cconb': 'application/octet-stream',
+                        '.wasm': 'application/wasm',
+                        '.png': 'image/png',
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg'
+                    };
+                    res.setHeader('Content-Type', mimeMap[extname] || 'application/octet-stream');
+                    return res.status(200).send(content);
                 }
+
+                res.status(200).send(filePath || req.url);
             },
-        },
-        {
-            // Fallback: serve library files directly from disk.
-            // Checks project library (library/cli/) and engine internal
-            // library (engine/editor/library/) for UUID-based asset paths.
-            url: /^\/(?:remote\/\w+\/)?([0-9a-f]{2})\/([0-9a-f-]+(?:@[0-9a-f]+)?)\.(json|bin|cconb)$/,
-            async handler(req: Request, res: Response, next: NextFunction) {
-                try {
-                    const relPath = req.path.replace(/^\/remote\/\w+\//, '/');
-                    const { default: scripting } = await import('../../core/scripting');
-                    const projectPath = scripting.projectPath;
-
-                    // Try project library first
-                    const projectLibPath = path.join(projectPath, 'library', 'cli', relPath);
-                    if (await fse.pathExists(projectLibPath)) {
-                        const content = await fse.readFile(projectLibPath);
-                        const ext = path.extname(relPath);
-                        const mimeMap: Record<string, string> = { '.json': 'application/json', '.bin': 'application/octet-stream', '.cconb': 'application/octet-stream' };
-                        res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
-                        return res.status(200).send(content);
-                    }
-
-                    // Try engine internal library
-                    const { Engine } = await import('../engine');
-                    const enginePath = Engine.getInfo().typescript.path;
-                    const engineLibPath = path.join(enginePath, 'editor', 'library', relPath);
-                    if (await fse.pathExists(engineLibPath)) {
-                        const content = await fse.readFile(engineLibPath);
-                        const ext = path.extname(relPath);
-                        const mimeMap: Record<string, string> = { '.json': 'application/json', '.bin': 'application/octet-stream', '.cconb': 'application/octet-stream' };
-                        res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
-                        return res.status(200).send(content);
-                    }
-
-                    next();
-                } catch (err) {
-                    console.error(`[Scene] Error serving library asset ${req.url}:`, err);
-                    next(err);
-                }
-            },
-        },
+        }
     ],
-    post: [],
+    post: [
+        {
+            url: '/rpc/:module/:method',
+            async handler(req: Request, res: Response) {
+                const { module, method } = req.params;
+                const args = req.body;
+                try {
+                    const { Rpc } = await import('./main-process/rpc');
+                    const result = await Rpc.getInstance().executeLocal(module as any, method as any, args);
+                    console.log(`[Scene Web RPC] ${module}.${method} ->`, typeof result === 'undefined' ? 'undefined' : (result === null ? 'null' : typeof result));
+                    res.status(200).json({ type: 'response', result });
+                } catch (e: any) {
+                    console.error(`[Scene] RPC Error (${module}.${method}):`, e);
+                    res.status(200).json({ type: 'response', error: e?.message || String(e) });
+                }
+            }
+        }
+    ],
     staticFiles: [],
     socket: {
         connection: (socket: any) => { },
