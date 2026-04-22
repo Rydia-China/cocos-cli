@@ -1,6 +1,6 @@
 import type { IMiddlewareContribution } from '../../server/interfaces';
 import { Request, Response } from 'express';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { existsSync } from 'fs';
 
 const buildMaps: Record<string, string> = {};
@@ -33,7 +33,7 @@ export default {
                 const dest = getBuildPath(platform, name);
                 const file = req.params[2];
                 if (dest && file) {
-                    const path = join(dest, file);
+                    const path = resolve(join(dest, file));
                     if (existsSync(path)) {
                         return res.sendFile(path);
                     }
