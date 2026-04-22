@@ -301,12 +301,19 @@ export class McpMiddleware {
      * 获取工具实例
      */
     private async getToolInstance(target: any): Promise<any> {
-        // 如果 target 已经是实例，直接返回
         if (typeof target === 'object' && target !== null) {
             return target;
         }
 
-        throw new Error('Unable to create tool instance');
+        if (typeof target === 'function') {
+            try {
+                return new target();
+            } catch (error) {
+                throw new Error(`Failed to instantiate tool class: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+
+        throw new Error('Unable to create tool instance: target must be a class constructor or an instance');
     }
 
     /**
