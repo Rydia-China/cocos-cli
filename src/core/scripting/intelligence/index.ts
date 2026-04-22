@@ -82,20 +82,68 @@ export class TypeScriptConfigBuilder {
         await this.addDbPathMappings(paths);
         await this.updateCustomMacroJS();
 
+        // Read project tsconfig.json to respect user's compiler options
+        // But only if it doesn't extend our generated config (avoid circular dependency)
+        let projectConfig: any = {};
+        let projectCompilerOptions: any = {};
+        
+        try {
+            if (await fs.pathExists(this._realTsConfigPath)) {
+                const rawConfig = await fs.readJson(this._realTsConfigPath);
+                
+                // Check if it extends our generated config (circular dependency)
+                const extendsPath = rawConfig.extends;
+                const isCircular = extendsPath && (
+                    extendsPath.includes('temp/tsconfig.cocos.json') ||
+                    extendsPath.includes('temp/cli/tsconfig.cocos.json') ||
+                    extendsPath.includes('./temp/tsconfig.cocos.json') ||
+                    extendsPath.includes('./temp/cli/tsconfig.cocos.json')
+                );
+                
+                if (!isCircular) {
+                    // Safe to use project config
+                    projectConfig = rawConfig;
+                    projectCompilerOptions = rawConfig.compilerOptions || {};
+                } else {
+                    // Circular dependency detected - only use compilerOptions that override
+                    // This allows project to override specific settings while extending our base
+                    projectCompilerOptions = rawConfig.compilerOptions || {};
+                }
+                
+                await fs.writeFile(
+                    ps.join(this._tempDirPath, 'debug-project-config.json'),
+                    JSON.stringify({ 
+                        rawConfig,
+                        isCircular,
+                        projectCompilerOptions,
+                        willUseTarget: projectCompilerOptions.target || 'ES2022',
+                        willUseModule: projectCompilerOptions.module || 'ES2022',
+                        willUseLib: projectCompilerOptions.lib || libs
+                    }, null, 2)
+                );
+            }
+        } catch (err) {
+            await fs.writeFile(
+                ps.join(this._tempDirPath, 'debug-error.txt'),
+                `Error reading project config: ${err}`
+            );
+        }
+
         const compilerOptions: Record<string, ts.CompilerOptionsValue> = {
-            // Based on ES2015, but may be extended.
-            target: 'ES2015',
-            module: 'ES2015',
+            // Based on ES2022, extended from original ES2015.
+            // Respect project's target/module if specified
+            target: projectCompilerOptions.target || 'ES2022',
+            module: projectCompilerOptions.module || 'ES2022',
 
             // True by default.
-            strict: true,
-            strictNullChecks: false,
-            noImplicitAny: false,
-            strictPropertyInitialization: false,
+            strict: projectCompilerOptions.strict !== undefined ? projectCompilerOptions.strict : true,
+            strictNullChecks: projectCompilerOptions.strictNullChecks !== undefined ? projectCompilerOptions.strictNullChecks : false,
+            noImplicitAny: projectCompilerOptions.noImplicitAny !== undefined ? projectCompilerOptions.noImplicitAny : false,
+            strictPropertyInitialization: projectCompilerOptions.strictPropertyInitialization !== undefined ? projectCompilerOptions.strictPropertyInitialization : false,
 
             types,
 
-            libs,
+            lib: projectCompilerOptions.lib || libs,
 
             paths,
 
@@ -114,6 +162,9 @@ export class TypeScriptConfigBuilder {
 
             // To avoid case problem on Windows.
             forceConsistentCasingInFileNames: true,
+
+            // Preserve other project settings
+            ...(projectCompilerOptions.skipLibCheck !== undefined && { skipLibCheck: projectCompilerOptions.skipLibCheck }),
         };
 
         const tsConfig = {
@@ -138,17 +189,53 @@ export class TypeScriptConfigBuilder {
         for (const key in compilerOptions) {
             this.internalTsConfig[key] = compilerOptions[key];
         }
-        this.internalTsConfig.target = ts.ScriptTarget.ES2015;
-        this.internalTsConfig.module = ts.ModuleKind.ES2015;
+        
+        const targetMap: Record<string, ts.ScriptTarget> = {
+            'ES3': ts.ScriptTarget.ES3,
+            'ES5': ts.ScriptTarget.ES5,
+            'ES6': ts.ScriptTarget.ES2015,
+            'ES2015': ts.ScriptTarget.ES2015,
+            'ES2016': ts.ScriptTarget.ES2016,
+            'ES2017': ts.ScriptTarget.ES2017,
+            'ES2018': ts.ScriptTarget.ES2018,
+            'ES2019': ts.ScriptTarget.ES2019,
+            'ES2020': ts.ScriptTarget.ES2020,
+            'ES2021': ts.ScriptTarget.ES2021,
+            'ES2022': ts.ScriptTarget.ES2022,
+            'ESNext': ts.ScriptTarget.ESNext,
+        };
+        
+        const moduleMap: Record<string, ts.ModuleKind> = {
+            'None': ts.ModuleKind.None,
+            'CommonJS': ts.ModuleKind.CommonJS,
+            'AMD': ts.ModuleKind.AMD,
+            'UMD': ts.ModuleKind.UMD,
+            'System': ts.ModuleKind.System,
+            'ES6': ts.ModuleKind.ES2015,
+            'ES2015': ts.ModuleKind.ES2015,
+            'ES2020': ts.ModuleKind.ES2020,
+            'ES2022': ts.ModuleKind.ES2022,
+            'ESNext': ts.ModuleKind.ESNext,
+        };
+        
+        const targetStr = String(compilerOptions.target || 'ES2022').toUpperCase();
+        const moduleStr = String(compilerOptions.module || 'ES2022').toUpperCase();
+        
+        this.internalTsConfig.target = targetMap[targetStr] || ts.ScriptTarget.ES2022;
+        this.internalTsConfig.module = moduleMap[moduleStr] || ts.ModuleKind.ES2022;
         this.internalTsConfig.moduleResolution = ts.ModuleResolutionKind.NodeJs;
+        
+        const libArray = compilerOptions.lib || libs;
+        this.internalTsConfig.lib = (Array.isArray(libArray) ? libArray : libs)
+            ?.filter((lib): lib is string => typeof lib === 'string')
+            .map(lib => `lib.${lib.toLowerCase()}.d.ts`);
 
         await fs.outputJson(this._configFilePath, tsConfig, {
             spaces: 2,
         });
 
         function buildLibs(): string[] | undefined {
-            const libs: string[] = [];
-            // TODO: add libs
+            const libs: string[] = ['ES2022', 'DOM'];
             return libs.length === 0 ? undefined : libs;
         }
     }
