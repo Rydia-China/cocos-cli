@@ -1,5 +1,11 @@
 import { configurationRegistry, ConfigurationScope, IBaseConfiguration } from '../configuration';
 
+export interface IOriginAxesConfig {
+    x: boolean;
+    y: boolean;
+    z: boolean;
+}
+
 export interface ICameraConfig {
     color: number[];
     fov: number;
@@ -8,6 +14,14 @@ export interface ICameraConfig {
     wheelSpeed: number;
     wanderSpeed: number;
     enableAcceleration: boolean;
+    aperture: number;
+    shutter: number;
+    iso: number;
+}
+
+export interface IRectSnapConfig {
+    enableSnapping: boolean;
+    snapThreshold: number;
 }
 
 export interface IGizmoConfig {
@@ -15,9 +29,14 @@ export interface IGizmoConfig {
     is3DIcon: boolean;
     iconSize: number;
     transformToolName: string;
+    viewMode: 'view' | 'select';
     pivot: string;
     coordinate: string;
     toolsVisibility3d: boolean;
+    gridVisible: boolean;
+    gridColor: number[];
+    originAxis2D: IOriginAxesConfig;
+    originAxis3D: IOriginAxesConfig;
     snapConfigs?: {
         position: { x: number; y: number; z: number };
         rotation: number;
@@ -26,6 +45,11 @@ export interface IGizmoConfig {
         isRotationSnapEnabled: boolean;
         isScaleSnapEnabled: boolean;
     };
+    rectSnapConfig?: IRectSnapConfig;
+}
+
+export interface ISceneViewConfig {
+    sceneLightOn: boolean;
 }
 
 export interface ISceneConfig {
@@ -41,6 +65,10 @@ export interface ISceneConfig {
      * Gizmo 配置，与 cocos-editor gizmos-infos profile 一致
      */
     gizmo: IGizmoConfig;
+    /**
+     * SceneView 配置
+     */
+    sceneView: ISceneViewConfig;
 }
 
 class SceneConfig {
@@ -54,15 +82,38 @@ class SceneConfig {
             wheelSpeed: 0.01,
             wanderSpeed: 10,
             enableAcceleration: true,
+            aperture: 19,
+            shutter: 7,
+            iso: 0,
         },
         gizmo: {
             is2D: false,
             is3DIcon: false,
             iconSize: 2,
             transformToolName: 'position',
+            viewMode: 'select',
             pivot: 'pivot',
             coordinate: 'local',
             toolsVisibility3d: true,
+            gridVisible: true,
+            gridColor: [166, 166, 166, 255],
+            originAxis2D: {
+                x: true,
+                y: true,
+                z: false,
+            },
+            originAxis3D: {
+                x: true,
+                y: false,
+                z: true,
+            },
+            rectSnapConfig: {
+                enableSnapping: true,
+                snapThreshold: 4,
+            },
+        },
+        sceneView: {
+            sceneLightOn: true,
         },
     };
 
