@@ -2,7 +2,9 @@ const mockQueryAssetInfo = jest.fn();
 const mockQueryAssetMeta = jest.fn();
 const mockRefreshAsset = jest.fn();
 const mockCreateAsset = jest.fn();
+const mockCreateAssetByType = jest.fn();
 const mockImportAsset = jest.fn();
+const mockSaveAsset = jest.fn();
 const mockQueryLinesInFile = jest.fn();
 const mockNodeQuery = jest.fn();
 const mockNodeDelete = jest.fn();
@@ -23,7 +25,9 @@ jest.mock('../src/core/assets', () => ({
         queryAssetMeta: (...args: unknown[]) => mockQueryAssetMeta(...args),
         refreshAsset: (...args: unknown[]) => mockRefreshAsset(...args),
         createAsset: (...args: unknown[]) => mockCreateAsset(...args),
+        createAssetByType: (...args: unknown[]) => mockCreateAssetByType(...args),
         importAsset: (...args: unknown[]) => mockImportAsset(...args),
+        saveAsset: (...args: unknown[]) => mockSaveAsset(...args),
     },
 }));
 
@@ -71,7 +75,9 @@ describe('Bug #497 common API error status codes', () => {
         mockQueryAssetMeta.mockReset();
         mockRefreshAsset.mockReset();
         mockCreateAsset.mockReset();
+        mockCreateAssetByType.mockReset();
         mockImportAsset.mockReset();
+        mockSaveAsset.mockReset();
         mockQueryLinesInFile.mockReset();
         mockNodeQuery.mockReset();
         mockNodeDelete.mockReset();
@@ -87,6 +93,7 @@ describe('Bug #497 common API error status codes', () => {
         expect(getCommonErrorStatus(new Error('ENOENT: no such file or directory'))).toBe(COMMON_STATUS.NOT_FOUND);
         expect(getCommonErrorStatus(new Error('Asset can not be found: db://assets/missing.scene'))).toBe(COMMON_STATUS.NOT_FOUND);
         expect(getCommonErrorStatus(new Error('can not find asset d:\\cocos\\program\\snake2\\assets\\resources\\Image'))).toBe(COMMON_STATUS.NOT_FOUND);
+        expect(getCommonErrorStatus(new Error('Invalid scene/prefab asset content: invalid JSON'))).toBe(COMMON_STATUS.BAD_REQUEST);
         expect(getCommonErrorStatus(new Error('Filename cannot be empty.'))).toBe(COMMON_STATUS.BAD_REQUEST);
         expect(getCommonErrorStatus(new Error('parameter error'))).toBe(COMMON_STATUS.BAD_REQUEST);
         expect(getCommonErrorStatus(new Error('unexpected internal crash'))).toBe(COMMON_STATUS.FAIL);
@@ -145,6 +152,17 @@ describe('Bug #497 common API error status codes', () => {
         expect(result.reason).toContain('Invalid URL');
     });
 
+    it('returns 400 when createAssetByType receives an invalid target URL', async () => {
+        mockCreateAssetByType.mockRejectedValue(new Error('Invalid URL: input URL must be a string and start with db:// \n  url:'));
+
+        const result = await new AssetsApi().createAssetByType('typescript', 'assets/Script', 'Food');
+
+        expect(result.code).toBe(HTTP_STATUS.BAD_REQUEST);
+        expect(result.data).toBeNull();
+        expect(result.reason).toContain('Invalid URL');
+        expect(result.reason).not.toContain('Error: Invalid URL');
+    });
+
     it('returns 404 when importing from a missing asset path', async () => {
         mockImportAsset.mockRejectedValue(new Error('can not find asset d:\\cocos\\program\\snake2\\assets\\resources\\Image\\food.png'));
 
@@ -156,6 +174,36 @@ describe('Bug #497 common API error status codes', () => {
         expect(result.code).toBe(HTTP_STATUS.NOT_FOUND);
         expect(result.data).toEqual([]);
         expect(result.reason).toContain('can not find asset');
+    });
+
+    it('returns 404 when saving a missing existing asset', async () => {
+        mockSaveAsset.mockRejectedValue(new Error('Failed to save asset: cannot find asset e:\\pink\\test12\\assets\\scripts\\Board.ts.tmp'));
+
+        const result = await new AssetsApi().saveAsset(
+            'e:\\pink\\test12\\assets\\scripts\\Board.ts.tmp',
+            '// temp file for fix'
+        );
+
+        expect(mockSaveAsset).toHaveBeenCalledWith(
+            'e:\\pink\\test12\\assets\\scripts\\Board.ts.tmp',
+            '// temp file for fix'
+        );
+        expect(result.code).toBe(HTTP_STATUS.NOT_FOUND);
+        expect(result.data).toBeNull();
+        expect(result.reason).toContain('cannot find asset');
+    });
+
+    it('returns 400 when saving invalid scene or prefab content', async () => {
+        mockSaveAsset.mockRejectedValue(new Error('Invalid scene/prefab asset content: invalid JSON: Unexpected token'));
+
+        const result = await new AssetsApi().saveAsset(
+            'db://assets/scenes/GameScene.scene',
+            'test content'
+        );
+
+        expect(result.code).toBe(HTTP_STATUS.BAD_REQUEST);
+        expect(result.data).toBeNull();
+        expect(result.reason).toContain('Invalid scene/prefab asset content');
     });
 
     it('returns 404 when queried file does not exist', async () => {

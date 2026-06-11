@@ -20,6 +20,196 @@ import EventEmitter from 'events';
 import { mergeMeta } from '../asset-handler/utils';
 import * as lodash from 'lodash';
 
+function isScriptAsset(asset: IAsset) {
+    const importer = asset.meta?.importer;
+    return importer === 'typescript'
+        || importer === 'javascript'
+        || /\.(?:[cm]?js|[cm]?ts|jsx|tsx)$/i.test(asset.source || '');
+}
+
+function getSceneOrPrefabAssetKind(asset: IAsset): 'scene' | 'prefab' | null {
+    const importer = asset.meta?.importer;
+    const source = asset.source || '';
+    if (importer === 'scene' || /\.scene$/i.test(source)) {
+        return 'scene';
+    }
+    if (importer === 'prefab' || /\.prefab$/i.test(source)) {
+        return 'prefab';
+    }
+    return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getTypeScriptSyntaxError(fileName: string, content: string): string | null {
+    let ts: typeof import('typescript') | null = null;
+    try {
+        ts = require('typescript') as typeof import('typescript');
+    } catch {
+        return null;
+    }
+
+    const result = ts.transpileModule(content, {
+        fileName,
+        reportDiagnostics: true,
+        compilerOptions: {
+            target: ts.ScriptTarget.ESNext,
+            experimentalDecorators: true,
+        },
+    });
+    const diagnostic = result.diagnostics?.find((item) => item.category === ts.DiagnosticCategory.Error);
+    if (!diagnostic) {
+        return null;
+    }
+
+    const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+    if (diagnostic.file && typeof diagnostic.start === 'number') {
+        const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+        return `${message} (${position.line + 1}:${position.character + 1})`;
+    }
+    return message;
+}
+
+function getScriptStructureError(content: string): string | null {
+    const stack: { char: string; line: number; column: number }[] = [];
+    let line = 1;
+    let column = 0;
+    let state: 'normal' | 'singleQuote' | 'doubleQuote' | 'template' | 'lineComment' | 'blockComment' = 'normal';
+    let escaped = false;
+    const opening = new Set(['(', '[', '{']);
+    const closing: Record<string, string> = {
+        ')': '(',
+        ']': '[',
+        '}': '{',
+    };
+
+    for (let index = 0; index < content.length; index++) {
+        const char = content[index];
+        const next = content[index + 1];
+        column++;
+
+        if (state === 'lineComment') {
+            if (char === '\n') {
+                state = 'normal';
+            }
+        } else if (state === 'blockComment') {
+            if (char === '*' && next === '/') {
+                state = 'normal';
+                index++;
+                column++;
+            }
+        } else if (state === 'singleQuote' || state === 'doubleQuote' || state === 'template') {
+            const quote = state === 'singleQuote' ? '\'' : state === 'doubleQuote' ? '"' : '`';
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === quote) {
+                state = 'normal';
+            }
+        } else {
+            if (char === '/' && next === '/') {
+                state = 'lineComment';
+                index++;
+                column++;
+            } else if (char === '/' && next === '*') {
+                state = 'blockComment';
+                index++;
+                column++;
+            } else if (char === '\'') {
+                state = 'singleQuote';
+            } else if (char === '"') {
+                state = 'doubleQuote';
+            } else if (char === '`') {
+                state = 'template';
+            } else if (opening.has(char)) {
+                stack.push({ char, line, column });
+            } else if (closing[char]) {
+                const last = stack.pop();
+                if (!last || last.char !== closing[char]) {
+                    return `unexpected "${char}" at ${line}:${column}`;
+                }
+            }
+        }
+
+        if (char === '\n') {
+            line++;
+            column = 0;
+            if (state === 'lineComment') {
+                state = 'normal';
+            }
+        }
+    }
+
+    if (state === 'singleQuote' || state === 'doubleQuote' || state === 'template') {
+        return `unterminated ${state === 'template' ? 'template string' : 'string literal'}`;
+    }
+    if (state === 'blockComment') {
+        return 'unterminated block comment';
+    }
+    const last = stack.pop();
+    if (last) {
+        return `unclosed "${last.char}" at ${last.line}:${last.column}`;
+    }
+    return null;
+}
+
+function getSceneOrPrefabJsonError(asset: IAsset, content: string | Buffer): string | null {
+    const kind = getSceneOrPrefabAssetKind(asset);
+    if (!kind) {
+        return null;
+    }
+
+    const text = typeof content === 'string'
+        ? content
+        : Buffer.isBuffer(content)
+            ? content.toString('utf8')
+            : null;
+    if (text === null) {
+        return 'content must be JSON text';
+    }
+
+    let data: unknown;
+    try {
+        data = JSON.parse(text);
+    } catch (error) {
+        return `invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    if (!Array.isArray(data)) {
+        return `expected ${kind} JSON array`;
+    }
+    if (data.length < 2) {
+        return `expected ${kind} JSON array with asset and root entries`;
+    }
+
+    const assetEntry = data[0];
+    const rootEntry = data[1];
+    if (!isRecord(assetEntry) || !isRecord(rootEntry)) {
+        return `expected ${kind} asset and root entries to be objects`;
+    }
+
+    if (kind === 'scene') {
+        if (assetEntry.__type__ !== 'cc.SceneAsset') {
+            return 'expected first entry __type__ to be cc.SceneAsset';
+        }
+        if (rootEntry.__type__ !== 'cc.Scene') {
+            return 'expected second entry __type__ to be cc.Scene';
+        }
+        return null;
+    }
+
+    if (assetEntry.__type__ !== 'cc.Prefab') {
+        return 'expected first entry __type__ to be cc.Prefab';
+    }
+    if (rootEntry.__type__ !== 'cc.Node') {
+        return 'expected second entry __type__ to be cc.Node';
+    }
+    return null;
+}
+
 class AssetOperation extends EventEmitter {
 
     /**
@@ -111,6 +301,7 @@ class AssetOperation extends EventEmitter {
             throw new Error(`${i18n.t('assets.save_asset.fail.uuid')}`);
         }
 
+        this._validateAssetContentBeforeSave(asset, content);
         const res = await assetHandlerManager.saveAsset(asset, content);
         if (res) {
             await asset._assetDB.reimport(asset.uuid);
@@ -119,6 +310,30 @@ class AssetOperation extends EventEmitter {
             throw asset.importError || new Error(`Save asset ${asset.source} failed`);
         }
         return assetQuery.encodeAsset(asset);
+    }
+
+    private _validateAssetContentBeforeSave(asset: IAsset, content: string | Buffer) {
+        this._validateScriptContentBeforeSave(asset, content);
+        this._validateSceneOrPrefabContentBeforeSave(asset, content);
+    }
+
+    private _validateScriptContentBeforeSave(asset: IAsset, content: string | Buffer) {
+        if (!isScriptAsset(asset) || typeof content !== 'string') {
+            return;
+        }
+        const structureError = getScriptStructureError(content);
+        const syntaxError = getTypeScriptSyntaxError(asset.source, content);
+        const error = syntaxError || structureError;
+        if (error) {
+            throw new Error(`Invalid script content: ${error}`);
+        }
+    }
+
+    private _validateSceneOrPrefabContentBeforeSave(asset: IAsset, content: string | Buffer) {
+        const error = getSceneOrPrefabJsonError(asset, content);
+        if (error) {
+            throw new Error(`Invalid scene/prefab asset content: ${error}`);
+        }
     }
 
     checkValidUrl(urlOrPath: string) {
@@ -174,10 +389,7 @@ class AssetOperation extends EventEmitter {
         if (!createMenus.length) {
             throw new Error(`Can not support create type: ${type}`);
         }
-        let dir = dirOrUrl;
-        if (dirOrUrl.startsWith('db://')) {
-            dir = url2path(dirOrUrl);
-        }
+        const dir = this._resolveCreateAssetDir(dirOrUrl);
         let createInfo: undefined | ICreateMenuInfo = createMenus[0];
         if (createMenus.length > 1 && options?.templateName) {
             createInfo = createMenus.find((menu) => menu.name === options.templateName);
@@ -186,7 +398,8 @@ class AssetOperation extends EventEmitter {
             }
         }
         const extName = extname(createInfo.fullFileName);
-        const target = join(dir, baseName + extName);
+        const fileName = extName && baseName.endsWith(extName) ? baseName : baseName + extName;
+        const target = join(dir, fileName);
 
         return await this.createAsset({
             handler: createInfo.handler,
@@ -196,6 +409,14 @@ class AssetOperation extends EventEmitter {
             template: createInfo.template,
             content: options?.content,
         });
+    }
+
+    private _resolveCreateAssetDir(dirOrUrl: string) {
+        const normalizedDirOrUrl = this._pathToDbUrlIfInsideAssetDB(dirOrUrl);
+        if (normalizedDirOrUrl.startsWith('db://')) {
+            return url2path(normalizedDirOrUrl);
+        }
+        return normalizedDirOrUrl;
     }
 
     /**

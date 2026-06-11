@@ -10,8 +10,10 @@ import {
     SchemaTargetPath,
     SchemaAssetOperationOption,
     SchemaSourcePath,
+    SchemaSaveAssetPath,
     SchemaAssetData,
     TUrlOrUUIDOrPath,
+    TSaveAssetPath,
     TDataKeys,
     TQueryAssetsOption,
     TSupportCreateType,
@@ -292,9 +294,9 @@ export class AssetsApi {
         try {
             ret.data = await assetManager.createAssetByType(ccType, dirOrUrl, baseName, options);
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error(e);
-            ret.reason = e instanceof Error ? e.message + e.stack : String(e);
+            ret.reason = e instanceof Error ? e.message : String(e);
         }
 
         return ret;
@@ -383,10 +385,10 @@ export class AssetsApi {
      */
     @tool('assets-save-asset')
     @title('Save Asset Data') // 保存资源数据
-    @description('Save the content of asset files. Used to modify the content of text-based assets (such as scripts, configuration files, scenes, etc.) and write to disk. Supports both string and Buffer data formats.') // 保存资源文件的内容。用于修改文本类资源（如脚本、配置文件、场景等）的内容并写入磁盘。支持字符串和 Buffer 两种数据格式。
+    @description('Save complete content to an existing asset file. Required arguments: pathOrUrlOrUUID (existing asset URL, UUID, or file path) and data (complete file content). Do not call this tool with empty arguments. This tool does not create new assets or temporary files; create the asset first with assets-create-asset-by-type or assets-create-asset, then call save. For scripts, pass complete syntactically valid content. For scene and prefab assets, pass complete valid Cocos serialized JSON; prefer scene-* tools and scene-save for scene graph edits.')
     @result(SchemaSaveAssetResult)
     async saveAsset(
-        @param(SchemaUrlOrUUIDOrPath) pathOrUrlOrUUID: TUrlOrUUIDOrPath,
+        @param(SchemaSaveAssetPath) pathOrUrlOrUUID: TSaveAssetPath,
         @param(SchemaAssetData) data: TAssetData
     ): Promise<CommonResultType<TSaveAssetResult>> {
         const code: HttpStatusCode = COMMON_STATUS.SUCCESS;
@@ -398,7 +400,7 @@ export class AssetsApi {
         try {
             ret.data = await assetManager.saveAsset(pathOrUrlOrUUID, data);
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('save asset fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
