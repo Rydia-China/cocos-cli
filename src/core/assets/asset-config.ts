@@ -86,14 +86,14 @@ class AssetConfig {
         this._assetConfig.root = project.path;
         const enginePath = Engine.getInfo().typescript.path;
         this._assetConfig.libraryRoot = this._assetConfig.libraryRoot || join(this._assetConfig.root, 'library');
-        this._assetConfig.tempRoot = join(this._assetConfig.root, 'temp/cli/asset-db');
+        this._assetConfig.tempRoot = join(this._assetConfig.root, 'temp/asset-db');
         await this.syncRuntimeConfigFromConfiguration();
         this._assetConfig.assetDBList = [{
             name: 'assets',
             target: join(this._assetConfig.root, 'assets'),
             readonly: false,
             visible: true,
-            library: join(this._assetConfig.root, 'library/cli'),
+            library: join(this._assetConfig.root, 'library'),
         }, {
             name: 'internal',
             target: join(enginePath, 'editor/assets'),
@@ -123,7 +123,7 @@ class AssetConfig {
                             target: mountTarget,
                             readonly: mount.readonly ?? true,
                             visible: mount.visible ?? false,
-                            library: join(this._assetConfig.root, `library/cli-extensions/${pkgJson.name || entry.name}`),
+                            library: join(this._assetConfig.root, `library/${pkgJson.name || entry.name}`),
                         });
                     } catch {
                         // Skip extensions with invalid package.json

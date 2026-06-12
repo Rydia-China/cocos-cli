@@ -227,7 +227,7 @@ export default {
                         if (relPath.startsWith(engineDistBase)) {
                             projectorRelPath = relPath.substring(engineDistBase.length);
                         }
-                        resourcePath = join(scripting.projectPath, 'temp', 'cli', 'programming', 'packer-driver', 'targets', 'preview', projectorRelPath).replace(/\\/g, '/');
+                        resourcePath = join(scripting.projectPath, 'temp', 'programming', 'packer-driver', 'targets', 'preview', projectorRelPath).replace(/\\/g, '/');
                     }
 
                     // If it's a directory, try index.json or index.js
