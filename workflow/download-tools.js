@@ -364,6 +364,35 @@ class ToolDownloader {
         }
     }
 
+    getOnlyToolNames() {
+        const inlineArg = process.argv.find((arg) => arg.startsWith('--only='));
+        const onlyIndex = process.argv.indexOf('--only');
+        const value = inlineArg
+            ? inlineArg.slice('--only='.length)
+            : onlyIndex >= 0
+                ? process.argv[onlyIndex + 1]
+                : '';
+        return value
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean);
+    }
+
+    selectTools(allTools) {
+        const onlyNames = this.getOnlyToolNames();
+        if (!onlyNames.length) {
+            return allTools;
+        }
+
+        const selected = allTools.filter((tool) => onlyNames.includes(tool.dist));
+        const selectedNames = new Set(selected.map((tool) => tool.dist));
+        const missing = onlyNames.filter((name) => !selectedNames.has(name));
+        if (missing.length) {
+            throw new Error(`未知工具: ${missing.join(', ')}`);
+        }
+        return selected;
+    }
+
     // 主函数
     async run() {
         console.log(`🖥️  当前平台: ${this.platform}`);
@@ -381,7 +410,7 @@ class ToolDownloader {
         // 获取工具列表
         const platformTools = tools[this.platform] || [];
         const commonTools = tools.common || [];
-        const allTools = [...platformTools, ...commonTools];
+        const allTools = this.selectTools([...platformTools, ...commonTools]);
 
         console.log(`📋 需要下载 ${allTools.length} 个工具文件\n`);
 
