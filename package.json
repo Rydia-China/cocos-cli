@@ -1,5 +1,5 @@
 {
-    "name": "@mob-ai/lv-build-runner",
+    "name": "mobai-lv-build-runner",
     "version": "0.0.1-alpha.22",
     "displayName": "Lunaverse Build Runner",
     "icon": "static/logo/logo.png",
