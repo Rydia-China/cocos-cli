@@ -1,6 +1,6 @@
 {
     "name": "mobai-lv-build-runner",
-    "version": "0.0.1-alpha.22",
+    "version": "0.0.1-alpha.23",
     "displayName": "Lunaverse Build Runner",
     "icon": "static/logo/logo.png",
     "description": "Internal Lunaverse build runner",
@@ -29,6 +29,7 @@
         "generate:mcp-types": "node --max-old-space-size=4096 node_modules/tsx/dist/cli.mjs e2e/scripts/generate-mcp-types.ts",
         "generate:dts": "tsx workflow/generate-dts.ts",
         "install:engine": "cd ./packages/engine && npm i",
+        "setup:runtime-engine": "node workflow/setup-runtime-engine.js",
         "compiler": "FORCE_UPDATE=true npm i",
         "compiler:engine": "node --max-old-space-size=8192 workflow/compiler-engine.js --force",
         "build:cc-module": "node workflow/build-cc-module.js",
@@ -58,9 +59,11 @@
         "static/scripting",
         "static/tools/cmake",
         "static/web",
+        "repo.json",
         "workflow",
         "writablePath",
-        "packages/cc-module"
+        "packages/cc-module",
+        "packages/engine-compiler"
     ],
     "overrides": {
         "fsevents": "2.3.3"

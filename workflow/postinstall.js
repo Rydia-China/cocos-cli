@@ -1,7 +1,9 @@
 const readline = require('readline');
+const fs = require('fs');
+const path = require('path');
 const utils = require('./utils');
 
-if (!utils.hasDevelopmentEnvironment()) return;
+if (!utils.hasDevelopmentEnvironment() || !fs.existsSync(path.join(__dirname, '..', '.git'))) return;
 
 /**
  * 询问用户是否强制更新全部模块

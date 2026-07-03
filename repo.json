@@ -1,12 +1,14 @@
 {
     "engine": {
-        "repo": "https://github.com/cocos/cocos4.git",
+        "repo": "https://github.com/Rydia-China/cocos4.git",
         "dist": "packages/engine",
-        "tag": "4.0.0-alpha.13"
+        "branch": "codex/label-underline-style",
+        "commit": "dbb29fb4325e20ce47974d5e2c38105f5de70615"
     },
     "external": {
-        "repo": "https://github.com/cocos/cocos-engine-external.git",
+        "repo": "https://github.com/Rydia-China/cocos-engine-external.git",
         "dist": "packages/engine/native/external",
-        "tag": "v4.0.0-4"
+        "branch": "codex/ios-simulator-openssl",
+        "commit": "41133a560fa91416cf871050e198b9f5f27a5402"
     }
 }
