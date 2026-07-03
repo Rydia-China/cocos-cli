@@ -7,6 +7,6 @@ This package is not a public SDK or a general-purpose development tool. The expo
 ## CI Install
 
 ```bash
-npm install -g mobai-lv-build-runner@0.0.1-alpha.23
+npm install -g mobai-lv-build-runner@0.0.1-alpha.24
 cocos --version
 ```

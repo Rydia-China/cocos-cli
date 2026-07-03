@@ -7,7 +7,7 @@ Lunaverse CI 打包链路使用的内部构建 runner。
 ## CI 安装
 
 ```bash
-npm install -g mobai-lv-build-runner@0.0.1-alpha.23
+npm install -g mobai-lv-build-runner@0.0.1-alpha.24
 cocos --version
 ```
 

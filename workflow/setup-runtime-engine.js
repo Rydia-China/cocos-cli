@@ -11,6 +11,7 @@ const args = new Set(process.argv.slice(2));
 const force = args.has('--force') || process.env.LUNAVERSE_BUILD_RUNNER_FORCE_ENGINE_SETUP === '1';
 const skipEngineBuild = args.has('--skip-engine-build') || process.env.LUNAVERSE_BUILD_RUNNER_SKIP_ENGINE_BUILD === '1';
 const skipEngineNpmInstall = args.has('--skip-npm-install') || process.env.LUNAVERSE_BUILD_RUNNER_SKIP_ENGINE_NPM_INSTALL === '1';
+const skipPackagedEngineCache = args.has('--skip-packaged-cache') || process.env.LUNAVERSE_BUILD_RUNNER_SKIP_PACKAGED_ENGINE_CACHE === '1';
 
 main().catch((error) => {
     console.error(error && error.stack ? error.stack : error);
@@ -107,15 +108,24 @@ async function ensureEngineBuild(engineConfig) {
         return;
     }
 
+    if (restorePackagedEngineCache(engineDir)) {
+        return;
+    }
+
     const compilerPath = path.join(rootDir, 'packages', 'engine-compiler', 'dist', 'index.js');
     if (!fs.existsSync(compilerPath)) {
         throw new Error(`Missing packaged engine compiler: ${compilerPath}`);
     }
     const { compileEngine } = require(compilerPath);
-    console.log('Compiling engine cache for native/editor runtime...');
-    await compileEngine(engineDir);
-    console.log('Compiling engine cache for web runtime...');
-    await compileEngine(engineDir, true);
+    try {
+        console.log('Compiling engine cache for native/editor runtime...');
+        await compileEngine(engineDir);
+        console.log('Compiling engine cache for web runtime...');
+        await compileEngine(engineDir, true);
+    } catch (error) {
+        logCompileError(error);
+        throw error;
+    }
 }
 
 function verifyRuntime(engineConfig, externalConfig) {
@@ -134,6 +144,53 @@ function verifyRuntime(engineConfig, externalConfig) {
             throw new Error(`Runtime engine setup missing required path: ${requiredPath}`);
         }
     }
+}
+
+function restorePackagedEngineCache(engineDir) {
+    if (skipPackagedEngineCache) {
+        console.log('Skipping packaged engine cache because --skip-packaged-cache was provided.');
+        return false;
+    }
+
+    const archivePath = path.join(rootDir, 'packages', 'engine-cache', 'dev-cli-runtime-cache.tgz');
+    if (!fs.existsSync(archivePath)) {
+        console.log(`No packaged engine cache found at ${archivePath}; falling back to live compile.`);
+        return false;
+    }
+
+    const cacheDir = path.join(engineDir, 'bin', '.cache');
+    const devCliDir = path.join(cacheDir, 'dev-cli');
+    console.log(`Restoring packaged engine cache: ${archivePath}`);
+    fs.rmSync(devCliDir, { recursive: true, force: true });
+    fs.mkdirSync(cacheDir, { recursive: true });
+    run('tar', ['-xzf', archivePath, '-C', cacheDir], { cwd: rootDir });
+
+    const requiredPaths = [
+        path.join(devCliDir, 'VERSION'),
+        path.join(devCliDir, 'editor', 'import-map.json'),
+        path.join(devCliDir, 'editor', 'loader.js'),
+        path.join(devCliDir, 'web', 'import-map.json'),
+        path.join(devCliDir, 'web', 'loader.js'),
+    ];
+    for (const requiredPath of requiredPaths) {
+        if (!fs.existsSync(requiredPath)) {
+            throw new Error(`Packaged engine cache is incomplete: ${requiredPath}`);
+        }
+    }
+    console.log(`Packaged engine cache restored: ${devCliDir}`);
+    return true;
+}
+
+function logCompileError(error) {
+    const details = {
+        name: error && error.name,
+        code: error && error.code,
+        id: error && error.id,
+        plugin: error && error.plugin,
+        loc: error && error.loc,
+        frame: error && error.frame,
+    };
+    console.error(`Engine cache compile failed with details: ${JSON.stringify(details, null, 2)}`);
 }
 
 function repoHeadMatches(repoDir, expectedCommit) {
