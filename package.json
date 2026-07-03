@@ -1,9 +1,9 @@
 {
-    "name": "cocos-cli",
-    "version": "0.0.1-alpha.21",
-    "displayName": "COCOS CLI",
+    "name": "@mob-ai/lv-build-runner",
+    "version": "0.0.1-alpha.22",
+    "displayName": "Lunaverse Build Runner",
     "icon": "static/logo/logo.png",
-    "description": "COCOS CLI",
+    "description": "Internal Lunaverse build runner",
     "main": "dist/index.js",
     "engines": {
         "vscode": ">=1.107.1",
@@ -11,7 +11,7 @@
         "pink": ">=0.0.1.6"
     },
     "bin": {
-        "cocos": "./dist/cli.js"
+        "cocos": "dist/cli.js"
     },
     "scripts": {
         "init": "node workflow/init.js",
@@ -47,12 +47,17 @@
         "cli": "node ./dist/cli.js",
         "rebuild": "node workflow/electron-rebuild.js"
     },
-    "author": "COCOS",
+    "author": "MobAI",
     "files": [
         "bin",
         "dist",
-        "docs",
-        "static",
+        "static/assets",
+        "static/build-templates",
+        "static/i18n",
+        "static/logo",
+        "static/scripting",
+        "static/tools/cmake",
+        "static/web",
         "workflow",
         "writablePath",
         "packages/cc-module"

@@ -1,82 +1,15 @@
-# 🎮 Cocos CLI
+# Lunaverse Build Runner
 
-[![Node.js](https://img.shields.io/badge/Node.js-22.17.0-green.svg)](https://nodejs.org/)
-[![Cocos Engine](https://img.shields.io/badge/Cocos-Engine-orange.svg)](https://github.com/cocos/cocos4)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+Lunaverse CI 打包链路使用的内部构建 runner。
 
-![cli logo](./static/image.png)
-> 🚀 专为 Cocos Engine 开发设计的强大命令行界面工具
+这个包不是公开 SDK，也不是通用开发工具。`cocos` 二进制命令仅为兼容 Moonshort 现有构建脚本保留。
 
-## ✨ 功能
-
-- 🏗️ **项目管理**：创建、导入、构建 Cocos 项目
-- 📦 **资源管理**：导入导出资源，批量处理
-- ⚡ **构建系统**：多平台构建支持
-- 🎨 **交互式界面**：向导式操作流程
-
-## 📋 环境要求
-
-- Node.js 22.17.0
-- Git
-- Visual Studio with C++ build tools (Windows 系统)
-- Xcode (macOS 系统)
-
-原生开发请参考 [原生开发环境搭建指南](https://docs.cocos.com/creator/3.8/manual/en/editor/publish/setup-native-development.html) 获取详细的搭建说明。
-
-## 🛠️ 安装
-
-1. **克隆仓库**
-
-   ```bash
-   git clone <repository-url>
-   cd cocos-cli
-   ```
-
-2. **安装依赖**
-
-   ```bash
-   npm install -g node-gyp
-   npm run init
-   npm install
-   ```
-
-3. **构建并链接到全局**
-
-   ```bash
-   npm run build
-   npm link
-   ```
-
-## 🚀 快速开始
-
-查看 [快速开始指南](docs/zh/quick-start.md) 了解详细使用步骤。
-
-## 📚 基本命令
+## CI 安装
 
 ```bash
-# 创建项目
-cocos create --project ./my-project
-
-# 构建项目
-cocos build --project ./my-project --platform web-mobile
-
-# 导入项目
-cocos import --project ./my-project
-
-# 显示项目信息
-cocos info --project ./my-project
-
-# 启动 MCP 服务器
-cocos start-mcp-server --project ./my-project --port 9527
-
-# 交互式向导
-cocos wizard
-
-# 显示帮助
-cocos --help
+npm install -g @mob-ai/lv-build-runner@0.0.1-alpha.22
+cocos --version
 ```
-
-详细命令说明请查看 [Commands 文档](docs/zh/commands.md)。
 
 ## 🛠️ 开发
 

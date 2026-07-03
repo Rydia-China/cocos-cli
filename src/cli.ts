@@ -12,8 +12,8 @@ const program = new Command();
 // 全局配置
 program
     .name('cocos')
-    .description('Cocos CLI tool for project management and building')
-    .version('0.0.1-alpha.21')
+    .description('Internal Lunaverse build runner')
+    .version('0.0.1-alpha.22')
     .option('--debug', 'Enable debug mode')
     .option('--no-interactive', 'Disable interactive mode (for CI)')
     .option('--config <path>', 'Specify config file path');
