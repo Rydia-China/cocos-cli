@@ -112,6 +112,8 @@ jobs:
         run: |
           set -euo pipefail
           npm run build:clear
+          npm run setup:runtime-engine
+          npm run build:cc-module
           node workflow/prepare-dts.js
           npx tsc -p tsconfig.json --declaration false --declarationMap false
           npm run build:static-web
