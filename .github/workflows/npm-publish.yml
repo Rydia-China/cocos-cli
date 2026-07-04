@@ -1,0 +1,142 @@
+name: Publish npm build runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version to publish; must match package.json'
+        required: true
+        type: string
+      dist_tag:
+        description: 'npm dist-tag'
+        required: true
+        default: alpha
+        type: choice
+        options:
+          - alpha
+          - latest
+      dry_run:
+        description: 'Run package checks without publishing'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish mobai-lv-build-runner
+    if: github.repository == 'Rydia-China/cocos-cli'
+    runs-on: ubuntu-24.04
+    env:
+      PACKAGE_NAME: mobai-lv-build-runner
+      REQUESTED_VERSION: ${{ inputs.version }}
+      REQUESTED_DIST_TAG: ${{ inputs.dist_tag }}
+      DRY_RUN: ${{ inputs.dry_run }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Use npm CLI with trusted publishing support
+        run: |
+          set -euo pipefail
+          npm install -g npm@11.15.0
+          node --version
+          npm --version
+
+      - name: Verify publish inputs
+        run: |
+          set -euo pipefail
+
+          actual_name="$(node -p "require('./package.json').name")"
+          actual_version="$(node -p "require('./package.json').version")"
+          registry="$(npm config get registry)"
+
+          if [ "$actual_name" != "$PACKAGE_NAME" ]; then
+            echo "package.json name mismatch: expected $PACKAGE_NAME, got $actual_name" >&2
+            exit 1
+          fi
+
+          if [ "$actual_version" != "$REQUESTED_VERSION" ]; then
+            echo "package.json version mismatch: expected $REQUESTED_VERSION, got $actual_version" >&2
+            exit 1
+          fi
+
+          case "$REQUESTED_DIST_TAG" in
+            alpha|latest) ;;
+            *)
+              echo "Unsupported npm dist-tag: $REQUESTED_DIST_TAG" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "$registry" != "https://registry.npmjs.org/" ]; then
+            echo "Unexpected npm registry: $registry" >&2
+            exit 1
+          fi
+
+          if npm view "$PACKAGE_NAME@$REQUESTED_VERSION" version --registry=https://registry.npmjs.org/ >/tmp/npm-existing-version.txt 2>/dev/null; then
+            echo "$PACKAGE_NAME@$REQUESTED_VERSION already exists on npm." >&2
+            cat /tmp/npm-existing-version.txt >&2
+            if [ "$DRY_RUN" != "true" ]; then
+              exit 1
+            fi
+            echo "Continuing because this is a dry run."
+          fi
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org/ --replace-registry-host=always
+
+      - name: Build publish artifacts
+        run: |
+          set -euo pipefail
+          npm run build
+          npx tsc -p packages/engine-compiler/tsconfig.json
+
+      - name: Verify package contents
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json --registry=https://registry.npmjs.org/ > .npm-pack-dry-run.json
+
+          node <<'NODE'
+          const fs = require('fs');
+          const [pack] = JSON.parse(fs.readFileSync('.npm-pack-dry-run.json', 'utf8'));
+          const files = new Set(pack.files.map((file) => file.path));
+          const required = [
+            'dist/cli.js',
+            'dist/index.js',
+            'dist/cocos.config.schema.json',
+            'packages/engine-cache/dev-cli-runtime-cache.tgz',
+            'packages/engine-cache/editor-runtime-cache.tgz',
+            'packages/engine-compiler/dist/index.js',
+            'static/build-templates/project.json',
+          ];
+
+          const missing = required.filter((file) => !files.has(file));
+          if (missing.length > 0) {
+            console.error(`Package is missing required files: ${missing.join(', ')}`);
+            process.exit(1);
+          }
+
+          console.log(`Package dry-run OK: ${pack.filename}`);
+          console.log(`Entries: ${pack.entryCount}`);
+          console.log(`Tarball size: ${pack.size}`);
+          console.log(`Unpacked size: ${pack.unpackedSize}`);
+          NODE
+
+      - name: Publish package
+        if: ${{ inputs.dry_run == false }}
+        run: npm publish --tag "$REQUESTED_DIST_TAG" --provenance --registry=https://registry.npmjs.org/
