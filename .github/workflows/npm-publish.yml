@@ -152,10 +152,15 @@ jobs:
           NODE
 
       - name: Verify npm publish token
-        if: ${{ inputs.dry_run == false }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm whoami --registry=https://registry.npmjs.org/
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "Missing NPM_TOKEN secret." >&2
+            exit 1
+          fi
+          npm whoami --registry=https://registry.npmjs.org/
 
       - name: Publish package
         if: ${{ inputs.dry_run == false }}
