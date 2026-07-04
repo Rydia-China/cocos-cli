@@ -112,13 +112,13 @@ jobs:
         run: |
           set -euo pipefail
           npm run build:clear
+          npx tsc -p packages/engine-compiler/tsconfig.json
           npm run setup:runtime-engine
           npm run build:cc-module
           node workflow/prepare-dts.js
           npx tsc -p tsconfig.json --declaration false --declarationMap false
           npm run build:static-web
           node workflow/generate-schema.js
-          npx tsc -p packages/engine-compiler/tsconfig.json
 
       - name: Verify package contents
         run: |
