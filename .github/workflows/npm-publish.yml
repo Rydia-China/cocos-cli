@@ -50,7 +50,7 @@ jobs:
           node-version: '22.19.0'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Use npm CLI with trusted publishing support
+      - name: Use npm CLI with provenance support
         run: |
           set -euo pipefail
           npm install -g npm@11.15.0
@@ -137,6 +137,14 @@ jobs:
           console.log(`Unpacked size: ${pack.unpackedSize}`);
           NODE
 
+      - name: Verify npm publish token
+        if: ${{ inputs.dry_run == false }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami --registry=https://registry.npmjs.org/
+
       - name: Publish package
         if: ${{ inputs.dry_run == false }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --tag "$REQUESTED_DIST_TAG" --provenance --registry=https://registry.npmjs.org/
