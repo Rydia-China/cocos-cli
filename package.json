@@ -1,6 +1,6 @@
 {
     "name": "mobai-lv-build-runner",
-    "version": "0.0.1-alpha.26",
+    "version": "0.0.1-alpha.27",
     "displayName": "Lunaverse Build Runner",
     "icon": "static/logo/logo.png",
     "description": "Internal Lunaverse build runner",
@@ -113,7 +113,8 @@
         "typescript-json-schema": "^0.65.1"
     },
     "dependencies": {
-        "@babel/core": "7.22.20",
+        "@babel/core": "7.28.5",
+        "@babel/preset-env": "7.28.5",
         "@cocos/asset-db": "^3.0.0-alpha.7",
         "@cocos/build-polyfills": "2.0.0",
         "@cocos/ccbuild": "2.3.18",
