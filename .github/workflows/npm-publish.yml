@@ -50,6 +50,14 @@ jobs:
           node-version: '22.19.0'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Force official npm registry
+        run: |
+          set -euo pipefail
+          rm -f .npmrc
+          npm config set registry https://registry.npmjs.org/ --location=user
+          npm config set strict-ssl true --location=user
+          npm config get registry
+
       - name: Use npm CLI with provenance support
         run: |
           set -euo pipefail
