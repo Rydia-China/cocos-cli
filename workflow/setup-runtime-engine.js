@@ -152,18 +152,31 @@ function restorePackagedEngineCache(engineDir) {
         return false;
     }
 
-    const archivePath = path.join(rootDir, 'packages', 'engine-cache', 'dev-cli-runtime-cache.tgz');
-    if (!fs.existsSync(archivePath)) {
-        console.log(`No packaged engine cache found at ${archivePath}; falling back to live compile.`);
+    const devCliArchivePath = path.join(rootDir, 'packages', 'engine-cache', 'dev-cli-runtime-cache.tgz');
+    const editorArchivePath = path.join(rootDir, 'packages', 'engine-cache', 'editor-runtime-cache.tgz');
+    if (!fs.existsSync(devCliArchivePath)) {
+        console.log(`No packaged engine cache found at ${devCliArchivePath}; falling back to live compile.`);
+        return false;
+    }
+    if (!fs.existsSync(editorArchivePath)) {
+        console.log(`No packaged editor runtime found at ${editorArchivePath}; falling back to live compile.`);
         return false;
     }
 
+    const binDir = path.join(engineDir, 'bin');
     const cacheDir = path.join(engineDir, 'bin', '.cache');
     const devCliDir = path.join(cacheDir, 'dev-cli');
-    console.log(`Restoring packaged engine cache: ${archivePath}`);
+    const editorDir = path.join(binDir, '.editor');
+
+    console.log(`Restoring packaged engine cache: ${devCliArchivePath}`);
     fs.rmSync(devCliDir, { recursive: true, force: true });
     fs.mkdirSync(cacheDir, { recursive: true });
-    run('tar', ['-xzf', archivePath, '-C', cacheDir], { cwd: rootDir });
+    run('tar', ['-xzf', devCliArchivePath, '-C', cacheDir], { cwd: rootDir });
+
+    console.log(`Restoring packaged editor runtime: ${editorArchivePath}`);
+    fs.rmSync(editorDir, { recursive: true, force: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    run('tar', ['-xzf', editorArchivePath, '-C', binDir], { cwd: rootDir });
 
     const requiredPaths = [
         path.join(devCliDir, 'VERSION'),
@@ -171,13 +184,18 @@ function restorePackagedEngineCache(engineDir) {
         path.join(devCliDir, 'editor', 'loader.js'),
         path.join(devCliDir, 'web', 'import-map.json'),
         path.join(devCliDir, 'web', 'loader.js'),
+        path.join(editorDir, 'web-adapter.js'),
+        path.join(editorDir, 'engine-adapter.js'),
     ];
     for (const requiredPath of requiredPaths) {
         if (!fs.existsSync(requiredPath)) {
+            fs.rmSync(devCliDir, { recursive: true, force: true });
+            fs.rmSync(editorDir, { recursive: true, force: true });
             throw new Error(`Packaged engine cache is incomplete: ${requiredPath}`);
         }
     }
     console.log(`Packaged engine cache restored: ${devCliDir}`);
+    console.log(`Packaged editor runtime restored: ${editorDir}`);
     return true;
 }
 
