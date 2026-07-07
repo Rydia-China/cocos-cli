@@ -15,8 +15,10 @@ let registered = false;
 // 保存已注册的监听源与回调，供 unregisterLiveReload 精确解绑，避免预览重启后监听泄漏。
 let scriptingRef: { off?: Function; removeListener?: Function } | null = null;
 let assetDBRef: { off?: Function; removeListener?: Function } | null = null;
+let configRef: { off?: Function; removeListener?: Function } | null = null;
 let onCompiled: (() => void) | null = null;
 let onRefreshFinish: (() => void) | null = null;
+let onConfigChanged: (() => void) | null = null;
 
 function removeListener(emitter: { off?: Function; removeListener?: Function } | null, event: string, fn: Function | null): void {
     if (!emitter || !fn) {
@@ -57,16 +59,25 @@ export async function registerLiveReload(): Promise<void> {
 
     const { default: scripting } = await import('../scripting');
     const { assetDBManager } = await import('../assets');
+    const { configurationManager } = await import('../configuration');
+    const { MessageType } = await import('../configuration/script/interface');
 
     onCompiled = () => scheduleReload();
     onRefreshFinish = () => scheduleReload();
+    // 工程配置变更（如切换物理后端 = 改 engine.includeModules）会影响预览 settings，
+    // 需清缓存并重载，否则预览仍用旧模块集（漏掉新后端的内置资源，报 builtinMaterial 加载失败）。
+    onConfigChanged = () => scheduleReload();
     scriptingRef = scripting as any;
     assetDBRef = assetDBManager as any;
+    configRef = configurationManager as any;
 
     // 脚本重编译成功
     scripting.on('compiled', onCompiled);
     // 资源批量刷新结束
     assetDBManager.on('assets:refresh-finish', onRefreshFinish);
+    // 工程配置变更（set / reload）
+    configurationManager.on(MessageType.Update, onConfigChanged);
+    configurationManager.on(MessageType.Reload, onConfigChanged);
 }
 
 /**
@@ -82,9 +93,14 @@ export function unregisterLiveReload(): void {
     }
     removeListener(scriptingRef, 'compiled', onCompiled);
     removeListener(assetDBRef, 'assets:refresh-finish', onRefreshFinish);
+    // MessageType.Update / MessageType.Reload
+    removeListener(configRef, 'configuration:update', onConfigChanged);
+    removeListener(configRef, 'configuration:reload', onConfigChanged);
     scriptingRef = null;
     assetDBRef = null;
+    configRef = null;
     onCompiled = null;
     onRefreshFinish = null;
+    onConfigChanged = null;
     registered = false;
 }

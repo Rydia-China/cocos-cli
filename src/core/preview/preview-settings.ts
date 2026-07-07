@@ -20,7 +20,15 @@ export async function getCachedPreviewSettings(startScene = ''): Promise<IPrevie
     }
     const { getPreviewSettings, queryDefaultBuildConfigByPlatform } = await import('../builder');
     const { assetManager } = await import('../assets');
+    const { fillIncludeModulesFromProjectConfig } = await import('../builder/share/common-options-validator');
     const options = await queryDefaultBuildConfigByPlatform('web-desktop');
+    // 与正式构建（builder createBuildTask）保持一致：从 cocos.config.json 补全 includeModules。
+    // 预览路径原本不补全，options.includeModules 为空/默认时，内置资源包会漏掉当前模块（尤其是所选
+    // 物理后端 physics-cannon/ammo/physx/builtin）的 dependentAssets，比如内置物理材质
+    // default-physics-material (ba21476f)。运行时 PhysicsSystem.initDefaultMaterial() 便会
+    // builtinResMgr.get 到 null，报 "Failed to load builtinMaterial"(errorID 9642)。
+    // 同时这也让浏览器预览真正按项目配置的物理后端运行（切后端后能生效）。
+    await fillIncludeModulesFromProjectConfig(options as any);
     // 解析有效启动场景：显式入参 > 构建配置（扁平或 packages 嵌套）> 项目首个场景。
     // 预览模式下 builder 不会校验/补全 startScene（见 setting-task/asset.ts），
     // 留空或指向已删除的场景都会导致前端请求 /scene/<uuid>.json 404。

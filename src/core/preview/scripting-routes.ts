@@ -262,7 +262,35 @@ export const scriptingRoutes = [
         url: '/scripting/engine/modules',
         async handler(req: Request, res: Response) {
             const { Engine } = await import('../engine');
-            const modules = Engine.getModules();
+            // 兜底：Engine 缓存的 includeModules
+            let modules = Engine.getModules();
+            // 直接读磁盘上的 cocos.config.json（配置真相源），绕开主进程配置缓存。
+            // 原因同 design-resolution 路由：configurationManager.reload() 不会把新值同步回已注册的配置实例，
+            // Engine._config 也只在 configuration:save 时刷新，改物理后端（= 改 engine.includeModules）后
+            // 不重启就拿不到新值，导致预览 game-boot 按旧模块列表选物理后端、切不过去。
+            try {
+                const { configurationManager } = await import('../configuration');
+                const fse = await import('fs-extra');
+                const configPath = await configurationManager.getConfigPath();
+                if (await fse.pathExists(configPath)) {
+                    const json = await fse.readJSON(configPath);
+                    const engineCfg = json?.engine;
+                    if (engineCfg) {
+                        // 与 Engine.syncConfig 的解析一致：优先 engine.includeModules，
+                        // 否则取选中的模块配置 engine.configs[globalConfigKey].includeModules。
+                        let disk = engineCfg.includeModules;
+                        if (!disk && engineCfg.configs) {
+                            const key = engineCfg.globalConfigKey || Object.keys(engineCfg.configs)[0];
+                            disk = engineCfg.configs?.[key]?.includeModules;
+                        }
+                        if (Array.isArray(disk)) {
+                            modules = disk;
+                        }
+                    }
+                }
+            } catch (error) {
+                console.debug('[engine/modules] read cocos.config.json failed, fallback to cached:', error);
+            }
             res.json(modules);
         },
     },

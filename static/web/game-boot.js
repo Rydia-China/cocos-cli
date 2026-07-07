@@ -71,6 +71,78 @@ export default async function gameBoot() {
             renderMode: 2,
         });
 
+        // 物理后端选择：预览用完整引擎（box2d / box2d-wasm / builtin 等所有后端都会在
+        // EVENT_PRE_SUBSYSTEM_INIT 时各自 register），默认后端只是「最后注册的那个」，未必等于项目实际
+        // 启用的后端，必须显式指定。模块列表取自 /scripting/engine/modules（= 项目 includeModules）。
+        //
+        // 关键时机与做法：物理世界在 game.init 内的 director.init() 首次创建（game.ts:
+        // emit(EVENT_PRE_SUBSYSTEM_INIT) → director.init() → DirectorEvent.INIT → PhysicsSystem2D
+        // 构造函数 createPhysicsWorld），用的是当时选定的后端。若在 game.init 之后再 switchTo，等于「先在
+        // 默认后端建好世界、再切换重建」，项目脚本在 EVENT_GAME_INITED 里设置的状态（如 2D 物理
+        // debugDrawFlags）会落到随后被丢弃的旧世界上而失效。
+        // 而 selector.switchTo 只有在世界「已存在」时才会真正改后端（世界为 null 时只重建、不改后端），
+        // 无法在世界创建前用它选后端。因此这里改为：在 game.init 之前注册 EVENT_PRE_SUBSYSTEM_INIT 回调，
+        // 该回调在各后端 register 之后、世界创建之前触发，用 register(id, wrapper) 把项目后端设为默认
+        // （register 在世界未创建时会把 selector 的 id/wrapper 指向该后端）。这样构造函数一次性就在正确
+        // 后端上创建世界、之后不再重建，无需事后 re-emit EVENT_GAME_INITED。
+        const Backends = {
+            'physics-cannon': 'cannon.js',
+            'physics-ammo': 'bullet',
+            'physics-builtin': 'builtin',
+            'physics-physx': 'physx',
+        };
+        const Backends2D = {
+            'physics-2d-box2d': 'box2d',
+            'physics-2d-box2d-wasm': 'box2d-wasm',
+            'physics-2d-builtin': 'builtin',
+        };
+        let backend = 'builtin';
+        let backend2d = 'builtin';
+        let includeModules = null;
+        try {
+            includeModules = await (await fetch(`${env.serverURL}/scripting/engine/modules`)).json();
+            (includeModules || []).forEach((m) => {
+                if (m in Backends) backend = Backends[m];
+                else if (m in Backends2D) backend2d = Backends2D[m];
+            });
+        } catch (e) {
+            console.warn('[Game Preview] query engine modules failed, use default physics backend:', e);
+        }
+        // 自定义渲染管线：customPipeline = includeModules 是否含 'custom-pipeline'（与 Engine.syncConfig 的推导
+        // 一致）。game.init 会读 settings.rendering.customPipeline 来建管线（game.ts:789）。这里用 disk-fresh 的
+        // includeModules 覆盖该值，使切换「自定义/内置管线」后 reload 即生效（无需重启），与物理后端同一数据源。
+        // 仅在成功取到 modules 时覆盖，避免请求失败时误把项目的自定义管线关掉。
+        if (Array.isArray(includeModules)) {
+            option.overrideSettings.rendering = Object.assign({}, option.overrideSettings.rendering, {
+                customPipeline: includeModules.includes('custom-pipeline'),
+            });
+        }
+
+        // Spine 版本：dev-cli 预览引擎同时编入 spine-3.8 与 spine-4.2（见 engine-compiler / cc.config.json
+        // dynamic override），运行时按项目 includeModules 选定。必须在引擎初始化（spine WASM 实例化 +
+        // spine-define patch）之前写入全局，供 spine-instantiate-dynamic.ts 读取。改配置 + 硬刷新即切换，
+        // 无需重编引擎/重启。真机构建走独立管线、编译期单版本，不受影响。
+        if (Array.isArray(includeModules)) {
+            globalThis._CC_SPINE_VERSION = includeModules.includes('spine-4.2') ? '4.2' : '3.8';
+        }
+        // selector 走全局 cc：System.import('cc') 是公开 ES 导出，不含 internal（cc.internal 为 undefined）；
+        // 引擎加载后把完整命名空间（含 internal.physics2d.selector）挂在 window.cc / globalThis.cc 上。
+        const ccGlobal = (typeof window !== 'undefined' && window.cc) || globalThis.cc || cc;
+        cc.game.once(cc.Game.EVENT_PRE_SUBSYSTEM_INIT, () => {
+            // 用已注册的 wrapper 重新 register，把项目后端设为默认（此时世界尚未创建）。
+            const seed = (selector, id) => {
+                if (selector && selector.backend && selector.backend[id]) {
+                    selector.register(id, selector.backend[id]);
+                }
+            };
+            try {
+                seed(ccGlobal.physics && ccGlobal.physics.selector, backend);
+                seed(ccGlobal.internal && ccGlobal.internal.physics2d && ccGlobal.internal.physics2d.selector, backend2d);
+            } catch (e) {
+                console.warn('[Game Preview] seed physics backend failed:', e);
+            }
+        });
+
         await cc.game.init(option);
 
         // 分辨率适配策略（仅浏览器预览）：按项目 designResolution 设置套用 ResolutionPolicy，
@@ -99,6 +171,7 @@ export default async function gameBoot() {
 
         await cc.game.run(async () => {
             cc.game.pause();
+
             const json = await (await fetch(`${env.serverURL}/scene/${encodeURIComponent(launchScene)}.json`)).json();
             try {
                 launchScene = json[1]._id;
