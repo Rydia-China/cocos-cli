@@ -1,6 +1,6 @@
-import { IInternalBuildOptions, InternalBuildResult } from '../../@types/protected';
-import { CocosParams } from '../native-common/pack-tool/base/default';
-import { ICustomBuildScriptParam, IOptions as INativeOption } from '../native-common/type';
+import { IInternalBuildOptions, InternalBuildResult } from '../../../@types/protected';
+import { CocosParams } from '../../native-common/pack-tool/base/default';
+import { ICustomBuildScriptParam, IOptions as INativeOption } from '../../native-common/type';
 
 export type IAppABI = 'armeabi-v7a' | 'arm64-v8a' | 'x86' | 'x86_64';
 
@@ -12,7 +12,6 @@ export interface IOptions extends INativeOption {
         landscapeRight: boolean;
         landscapeLeft: boolean;
         portrait: boolean;
-        upsideDown: boolean;
     };
     apiLevel: number;
     appABIs: IAppABI[];
@@ -30,6 +29,7 @@ export interface IOptions extends INativeOption {
     javaHome?: string;
     javaPath?: string;
     swappy: boolean;
+    isSoFileCompressed: boolean;
     renderBackEnd: {
         vulkan: boolean;
         gles3: boolean;
@@ -51,6 +51,5 @@ export interface IAndroidInternalBuildOptions extends IInternalBuildOptions {
 }
 
 export interface IBuildResult extends InternalBuildResult {
-    userFrameWorks: boolean; // 是否使用用户的配置数据
+    userFrameWorks: boolean;
 }
-

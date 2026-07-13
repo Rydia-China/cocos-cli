@@ -22,11 +22,13 @@ export const baseNativeCommonOptions: IDisplayOptions = {
         type: 'boolean',
         default: false,
         experiment: true,
+        hidden: true,
     },
     serverMode: {
         label: 'Server Mode',
         type: 'boolean',
         default: false,
+        hidden: true,
     },
     netMode: {
         label: 'NetMode',
@@ -37,21 +39,25 @@ export const baseNativeCommonOptions: IDisplayOptions = {
             { label: 'Host Server', value: 1 },
             { label: 'Listen Server', value: 2 },
         ],
+        hidden: true,
     },
     encrypted: {
         label: 'i18n:builder.platforms.native.options.encrypted',
         type: 'boolean',
         default: false,
+        hidden: true,
     },
     xxteaKey: {
         label: 'i18n:builder.platforms.native.options.xxtea_key',
         type: 'string',
         default: Utils.UUID.generate().substr(0, 16),
+        hidden: true,
     },
     compressZip: {
         label: 'i18n:builder.platforms.native.options.compress_zip',
         type: 'boolean',
         default: false,
+        hidden: true,
     },
     JobSystem: {
         label: 'Job System',
@@ -63,6 +69,7 @@ export const baseNativeCommonOptions: IDisplayOptions = {
             { label: 'TBB', value: 'tbb' },
         ],
         verifyRules: [],
+        hidden: true,
     },
 };
 

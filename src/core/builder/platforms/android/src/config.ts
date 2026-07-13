@@ -1,13 +1,14 @@
 'use strict';
 
-import { IPlatformBuildPluginConfig } from '../../@types/protected';
-import { commonOptions, baseNativeCommonOptions } from '../native-common';
+import { IPlatformBuildPluginConfig } from '../../../@types/protected';
+import { commonOptions, baseNativeCommonOptions } from '../../native-common';
 
 const config: IPlatformBuildPluginConfig = {
     ...commonOptions,
     displayName: 'Android',
     platformType: 'ANDROID',
     doc: 'editor/publish/android/build-example-android.html',
+    hooks: './src/hooks',
     commonOptions: {
         polyfills: {
             hidden: true,
@@ -30,6 +31,38 @@ const config: IPlatformBuildPluginConfig = {
     },
     options: {
         ...baseNativeCommonOptions,
+        swappy: {
+            label: 'i18n:android.options.swappy',
+            type: 'boolean',
+            default: false,
+            description: 'i18n:android.options.swappy_tips',
+        },
+        renderBackEnd: {
+            label: 'i18n:android.options.render_back_end',
+            type: 'object',
+            properties: {
+                vulkan: {
+                    label: 'Vulkan',
+                    type: 'boolean',
+                    default: false,
+                },
+                gles3: {
+                    label: 'GLES3',
+                    type: 'boolean',
+                    default: true,
+                },
+                gles2: {
+                    label: 'GLES2',
+                    type: 'boolean',
+                    default: true,
+                },
+            },
+            default: {
+                vulkan: false,
+                gles3: true,
+                gles2: true,
+            },
+        },
         packageName: {
             label: 'i18n:android.options.package_name',
             type: 'string',
@@ -44,9 +77,35 @@ const config: IPlatformBuildPluginConfig = {
         },
         appABIs: {
             label: 'i18n:android.options.appABIs',
-            type: 'array',
-            default: ['arm64-v8a'],
-            items: { type: 'string' },
+            type: 'object',
+            properties: {
+                'arm64-v8a': {
+                    label: 'arm64-v8a',
+                    type: 'boolean',
+                    default: true,
+                },
+                'arm-v7a': {
+                    label: 'arm-v7a',
+                    type: 'boolean',
+                    default: false,
+                },
+                x86: {
+                    label: 'x86',
+                    type: 'boolean',
+                    default: false,
+                },
+                x86_64: {
+                    label: 'x86_64',
+                    type: 'boolean',
+                    default: false,
+                },
+            },
+            default: {
+                'arm64-v8a': true,
+                'arm-v7a': false,
+                x86: false,
+                x86_64: false,
+            },
         },
         resizeableActivity: {
             label: 'i18n:android.options.resizeable_activity',
@@ -67,11 +126,6 @@ const config: IPlatformBuildPluginConfig = {
                     type: 'boolean',
                     default: false,
                 },
-                upsideDown: {
-                    label: 'i18n:android.options.upsideDown',
-                    type: 'boolean',
-                    default: false,
-                },
                 landscapeRight: {
                     label: 'i18n:android.options.landscape_right',
                     type: 'boolean',
@@ -85,7 +139,6 @@ const config: IPlatformBuildPluginConfig = {
             },
             default: {
                 portrait: false,
-                upsideDown: false,
                 landscapeRight: true,
                 landscapeLeft: true,
             },
@@ -119,11 +172,13 @@ const config: IPlatformBuildPluginConfig = {
             label: 'i18n:android.options.app_bundle',
             type: 'boolean',
             default: false,
+            hidden: true,
         },
         androidInstant: {
             label: 'i18n:android.options.google_play_instant',
             type: 'boolean',
             default: false,
+            hidden: true,
         },
         inputSDK: {
             label: 'i18n:android.options.input_sdk',
@@ -133,39 +188,14 @@ const config: IPlatformBuildPluginConfig = {
         remoteUrl: {
             label: 'i18n:android.options.remoteUrl',
             type: 'string',
+            hidden: true,
             default: '',
         },
-        swappy: {
-            label: 'i18n:android.options.swappy',
+        isSoFileCompressed: {
+            label: 'i18n:android.options.compress_so_files',
             type: 'boolean',
-            default: false,
-            description: 'i18n:android.options.swappy_tips',
-        },
-        renderBackEnd: {
-            label: 'i18n:android.options.render_back_end',
-            type: 'object',
-            properties: {
-                vulkan: {
-                    label: 'Vulkan',
-                    type: 'boolean',
-                    default: false,
-                },
-                gles3: {
-                    label: 'GLES3',
-                    type: 'boolean',
-                    default: true,
-                },
-                gles2: {
-                    label: 'GLES2',
-                    type: 'boolean',
-                    default: true,
-                },
-            },
-            default: {
-                vulkan: false,
-                gles3: true,
-                gles2: true,
-            },
+            default: true,
+            description: 'i18n:android.options.compress_so_files_tips',
         },
     },
     textureCompressConfig: {
@@ -175,8 +205,6 @@ const config: IPlatformBuildPluginConfig = {
             rgba: ['etc2_rgba', 'etc1_rgb_a', 'astc_4x4', 'astc_5x5', 'astc_6x6', 'astc_8x8', 'astc_10x5', 'astc_10x10', 'astc_12x12'],
         },
     },
-    hooks: './hooks',
 };
 
 export default config;
-
