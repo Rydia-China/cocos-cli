@@ -227,6 +227,21 @@ export async function startup(options: {
     const am = cc.assetManager;
     const origLoadAny = am.loadAny.bind(am);
 
+    // Tracks per-uuid native (image/buffer) loading. An asset is added to the
+    // asset cache before its native data is attached (so circular references can
+    // resolve), which means a concurrent cache hit could otherwise return a
+    // texture/image whose width/height are still 0. Cache hits await this to get
+    // fully-loaded dimensions; see loadFromServer / loadAny below.
+    const nativeReady = new Map<string, Promise<void>>();
+
+    // Dedups concurrent loads of the same uuid during the fetch/deserialize
+    // window (before the asset is registered in the cache). Without this, two
+    // sprite frames sharing a texture can each start a separate load, producing
+    // duplicate half-initialized instances and racing the nativeReady bookkeeping
+    // (one loader deleting the other's readiness promise), which leaves a
+    // width-0 texture reachable via a cache hit.
+    const inFlight = new Map<string, Promise<{ err: any; asset: any }>>();
+
     function tryDecompress(uuid: string): string {
         if (uuid.includes('-')) return uuid;
         try {
@@ -251,8 +266,41 @@ export async function startup(options: {
 
     const silentClassFinder = (id: string) => cc.js?.getClassById?.(id) ?? cc._MissingScript ?? null;
 
+    async function queryNativeExt(uuid: string): Promise<string> {
+        // The imported asset JSON (e.g. cc.ImageAsset, serialized as
+        // { fmt, w:0, h:0 }) does not embed the native extension — it lives in
+        // the asset's library file map. Recover it so assets whose real data
+        // (and, for images, their width/height) come from the native file can
+        // be loaded. Without this, an ImageAsset stays 0x0, its Texture2D
+        // reports width 0, and every SpriteFrame on it fails checkRect and gets
+        // its rect reset (e.g. sprite frames from a plist atlas in a prefab).
+        try {
+            const res = await fetch(`/query-asset-info/${encodeURIComponent(uuid)}`);
+            if (!res.ok) return '';
+            const info: any = await res.json();
+            const lib = info?.library;
+            if (!lib) return '';
+            // The native entry is the library file that is not the serialized
+            // asset itself (.json / .cconb).
+            const key = Object.keys(lib).find((k) => k !== '.json' && k !== '.cconb');
+            return key ?? '';
+        } catch {
+            return '';
+        }
+    }
+
     async function loadNativeAsset(asset: any, uuid: string): Promise<void> {
-        const nativeExt: string | undefined = asset._native;
+        let nativeExt: string | undefined = asset._native;
+        // Only ImageAsset needs the native-extension recovery: its serialized
+        // JSON is { fmt, w:0, h:0 } and the real dimensions come from the native
+        // image. Restricting the extra /query-asset-info lookup to images avoids
+        // issuing a blocking request for every other asset in the graph
+        // (prefabs, components, materials, ...), which would otherwise stall a
+        // large scene/prefab load.
+        if (!nativeExt && cc.ImageAsset && asset instanceof cc.ImageAsset) {
+            nativeExt = await queryNativeExt(uuid);
+            if (nativeExt) asset._native = nativeExt;
+        }
         if (!nativeExt) return;
 
         const encodedUuid = encodeURIComponent(uuid);
@@ -318,41 +366,73 @@ export async function startup(options: {
 
             const Details = cc.deserialize?.Details;
             let asset;
+            let details: any;
             const deserializeOpts = { classFinder: silentClassFinder };
 
             if (Details) {
-                const details = Details.pool?.get?.() ?? new Details();
+                details = Details.pool?.get?.() ?? new Details();
                 if (details.reset) details.reset();
                 asset = cc.deserialize(deserializeInput, details, deserializeOpts);
-
-                const uuidList = details.uuidList;
-                if (uuidList && uuidList.length > 0) {
-                    const depMap: Record<string, any> = {};
-                    await Promise.all(
-                        uuidList
-                            .filter((id: any) => typeof id === 'string')
-                            .map((depUuid: string) => new Promise<void>((resolve) => {
-                                am.loadAny(depUuid, (err: any, depAsset: any) => {
-                                    if (!err && depAsset) depMap[depUuid] = depAsset;
-                                    resolve();
-                                });
-                            })),
-                    );
-                    if (details.assignAssetsBy) {
-                        details.assignAssetsBy((depUuid: string) => depMap[depUuid] ?? null);
-                    }
-                }
-                Details.pool?.put?.(details);
             } else {
                 asset = cc.deserialize(deserializeInput, undefined, deserializeOpts);
             }
 
+            // Register in the cache BEFORE resolving dependencies. Circular
+            // references (e.g. a SpriteAtlas lists its SpriteFrames while each
+            // SpriteFrame references its atlas back) would otherwise re-enter
+            // loadFromServer for an asset already being loaded and recurse
+            // forever. With the (partial) instance already cached, the circular
+            // loadAny below resolves to it and the cycle is broken.
             asset._uuid = uuid;
             am.assets.add(uuid, asset);
-            stripNullComponents(asset);
-            if (asset.data) stripNullComponents(asset.data);
-            await loadNativeAsset(asset, uuid);
-            try { if (asset.onLoaded) asset.onLoaded(); } catch { /* some assets need specific native data */ }
+
+            // For width/data-sensitive leaf assets (textures/images), publish a
+            // readiness promise now — synchronously with the cache add — so a
+            // concurrent cache hit waits for the fully-loaded asset instead of
+            // reading a still-zero-sized one. These types never take part in a
+            // dependency cycle, so awaiting them cannot deadlock. Other
+            // (potentially cyclic) types are intentionally left without a promise
+            // so their cache hits return the partial instance immediately, which
+            // is what breaks the cycle above.
+            let resolveReady: (() => void) | undefined;
+            const needsReady = (cc.TextureBase && asset instanceof cc.TextureBase)
+                || (cc.ImageAsset && asset instanceof cc.ImageAsset);
+            if (needsReady) {
+                nativeReady.set(uuid, new Promise<void>((r) => { resolveReady = r; }));
+            }
+
+            try {
+                if (details) {
+                    const uuidList = details.uuidList;
+                    if (uuidList && uuidList.length > 0) {
+                        const depMap: Record<string, any> = {};
+                        await Promise.all(
+                            uuidList
+                                .filter((id: any) => typeof id === 'string')
+                                .map((depUuid: string) => new Promise<void>((resolve) => {
+                                    am.loadAny(depUuid, (err: any, depAsset: any) => {
+                                        if (!err && depAsset) depMap[depUuid] = depAsset;
+                                        resolve();
+                                    });
+                                })),
+                        );
+                        if (details.assignAssetsBy) {
+                            details.assignAssetsBy((depUuid: string) => depMap[depUuid] ?? null);
+                        }
+                    }
+                    Details.pool?.put?.(details);
+                }
+
+                stripNullComponents(asset);
+                if (asset.data) stripNullComponents(asset.data);
+                await loadNativeAsset(asset, uuid);
+                try { if (asset.onLoaded) asset.onLoaded(); } catch { /* some assets need specific native data */ }
+            } finally {
+                if (resolveReady) {
+                    nativeReady.delete(uuid);
+                    resolveReady();
+                }
+            }
             onComplete?.(null, asset);
         } catch (e: any) {
             console.warn(`[AssetFallback] load failed for ${uuid}:`, e);
@@ -373,10 +453,35 @@ export async function startup(options: {
             const dec = tryDecompress(uuid);
             const cached = am.assets.get(uuid) ?? am.assets.get(dec);
             if (cached) {
-                onComplete?.(null, cached);
+                // The asset may be cached but still loading its native data
+                // (added to the cache early to break circular refs). Wait for it
+                // so shared textures/images report their real width/height.
+                const nr = nativeReady.get(uuid) ?? nativeReady.get(dec);
+                if (nr) {
+                    nr.then(() => onComplete?.(null, cached), () => onComplete?.(null, cached));
+                } else {
+                    onComplete?.(null, cached);
+                }
                 return;
             }
-            loadFromServer(uuid, onComplete);
+            // Dedup concurrent loads of the same uuid that arrive before it is
+            // registered in the cache, so only one loadFromServer runs per asset.
+            // (Circular back-references hit the cache above — the asset is cached
+            // before its dependencies are resolved — so they never reach here,
+            // meaning this await can never target an ancestor and cannot deadlock.)
+            const inf = inFlight.get(uuid) ?? inFlight.get(dec);
+            if (inf) {
+                inf.then(({ err, asset }) => onComplete?.(err, asset));
+                return;
+            }
+            let settle!: (r: { err: any; asset: any }) => void;
+            const p = new Promise<{ err: any; asset: any }>((resolve) => { settle = resolve; });
+            inFlight.set(uuid, p);
+            loadFromServer(uuid, (err: any, asset: any) => {
+                inFlight.delete(uuid);
+                onComplete?.(err, asset);
+                settle({ err, asset });
+            });
             return;
         }
         origLoadAny(requests, options, onComplete);

@@ -413,9 +413,6 @@
     <script type="module">
         const { default: boot } = await import("/static/web/scene-editor-boot.js");
         await boot();
-        if (window.cli && window.cli.Scene && window.cli.Scene.Engine) {
-            window.cli.Scene.Engine.resume();
-        }
     </script>
     <script>
         /* ── Helpers ── */
