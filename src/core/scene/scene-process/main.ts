@@ -15,6 +15,12 @@ async function startup() {
         }
     });
 
+    // 父进程死亡时 IPC 通道断开，立即退出避免被 launchd 收养成为孤儿进程
+    process.on('disconnect', () => {
+        console.log('[Scene] Parent disconnected, exiting');
+        process.exit(0);
+    });
+
     console.log(`[Scene] startup worker pid: ${process.pid}`);
 
     console.log(`[Scene] parse args ${process.argv}`);
@@ -49,6 +55,7 @@ async function startup() {
         // 初始化 engine 服务
         const { Service } = await import('./service/core/decorator');
         await Service.Engine.init();
+        await serviceManager.initAllServices();
     });
 
     console.log('[Scene] initEngine success');

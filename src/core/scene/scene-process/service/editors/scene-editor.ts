@@ -1,5 +1,5 @@
-import { Scene, SceneAsset, Component, Node } from 'cc';
-import { type IBaseIdentifier, ICreateOptions, IEditorTarget, INode, IScene } from '../../../common';
+import { Scene, SceneAsset } from 'cc';
+import { type IBaseIdentifier, ICreateOptions, IEditorTarget, IScene, INodeDumpOptions } from '../../../common';
 import { Rpc } from '../../rpc';
 import { sceneUtils } from '../scene/utils';
 import { BaseEditor } from './base-editor';
@@ -13,37 +13,22 @@ import { editorPrefabUtils } from '../prefab/prefab-editor-utils';
  */
 export class SceneEditor extends BaseEditor {
 
-    async encode(simpleNode?: boolean, entity?: IEditorTarget | null): Promise<IScene> {
+    async encode(entity?: IEditorTarget | null, options?: INodeDumpOptions): Promise<IScene> {
         entity = entity ?? this.entity;
         if (!entity) {
             throw new Error('encode 失败，没有打开场景');
         }
-        simpleNode = simpleNode ?? true;
-        return {
-            ...entity.identifier,
-            name: entity.instance.name,
-            prefab: sceneUtils.generatePrefabInfo(entity.instance['_prefab']),
-            children: entity.instance.children
-                .map((node: Node) => {
-                    if(simpleNode) {
-                        return sceneUtils.generateNodeIdentifier(node);
-                    } else {
-                        return sceneUtils.generateNodeInfo(node, true);
-                    }
-                })
-                .filter(child => child !== null) as INode[],
-            components: entity.instance.components
-                .map((component: Component) => {
-                    return sceneUtils.generateComponentInfo(component);
-                })
-        };
+        const scene = sceneUtils.generateNodeDump(entity.instance, options) as IScene;
+        const d = scene as any;
+        d.__identifier__ = entity.identifier;
+        return scene;
     }
 
-    async open(asset: IAssetInfo, simpleNode?: boolean): Promise<IScene> {
+    protected async _doOpen(asset: IAssetInfo, options?: INodeDumpOptions): Promise<IScene> {
         const identifier = this.getIdentifier(asset);
 
         if (this.entity?.identifier.assetUuid === identifier.assetUuid) {
-            return await this.encode(simpleNode);
+            return await this.encode(undefined, options);
         }
 
         const sceneAsset = await sceneUtils.loadAny<SceneAsset>(identifier.assetUuid);
@@ -54,14 +39,16 @@ export class SceneEditor extends BaseEditor {
             identifier,
         });
 
-        return this.encode(simpleNode);
+        return this.encode(undefined, options);
     }
 
-    async close(): Promise<boolean> {
+    async close(options?: { save?: boolean }): Promise<boolean> {
         if (!this.entity) {
             throw new Error('[close] 没有打开场景');
         }
-        await this.save();
+        if (options?.save !== false) {
+            await this.save();
+        }
         await sceneUtils.runScene(new Scene(''));
         this.setCurrentOpen(null);
         return true;
@@ -71,8 +58,24 @@ export class SceneEditor extends BaseEditor {
         if (!this.entity) {
             throw new Error('[save] 没有打开场景');
         }
+        return this.saveToAsset(this.entity.identifier.assetUuid);
+    }
+
+    async saveTo(asset: IAssetInfo): Promise<IAssetInfo> {
+        return this.saveToAsset(asset.uuid);
+    }
+
+    private async saveToAsset(assetUuid: string): Promise<IAssetInfo> {
+        if (!this.entity) {
+            throw new Error('[save] 没有打开场景');
+        }
         const serializedData = sceneUtils.serialize(this.entity.instance as Scene);
-        return await Rpc.getInstance().request('assetManager', 'saveAsset', [this.entity.identifier.assetUuid, serializedData]);
+        const saved = await Rpc.getInstance().request('assetManager', 'saveAsset', [assetUuid, serializedData]);
+        if (!saved || saved.uuid !== assetUuid) {
+            throw new Error(`保存目标资源标识不一致: 期望 ${assetUuid}，实际 ${saved?.uuid ?? 'undefined'}`);
+        }
+        this.entity.identifier = this.getIdentifier(saved);
+        return saved;
     }
 
     protected async _doReload(): Promise<IScene> {
@@ -85,7 +88,7 @@ export class SceneEditor extends BaseEditor {
         const sceneAfterLoad = await sceneUtils.runSceneImmediateByJson(serializeJSON);
         editorPrefabUtils.restorePrefabUUID(sceneAfterLoad, prefabUUIDMap);
         this.entity.instance = sceneAfterLoad;
-        return this.encode();
+        return this.encode(undefined, this._lastOpenOptions);
     }
 
     async create(params: ICreateOptions): Promise<IBaseIdentifier> {

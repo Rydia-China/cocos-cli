@@ -2,6 +2,7 @@
 
 import { AssetDBRegisterInfo, IAsset, IAssetDBInfo, IAssetInfo, QueryAssetsOption } from '../@types/private';
 import * as assetdb from '@cocos/asset-db';
+import type { IAssetFileSystemProvider } from '@cocos/asset-db/libs/filesystem';
 import EventEmitter from 'events';
 import { ensureDirSync, existsSync } from 'fs-extra';
 import { extname, join, relative } from 'path';
@@ -9,6 +10,7 @@ import { newConsole } from '../../base/console';
 import { decidePromiseState, PROMISE_STATE } from '../utils';
 import pluginManager from './plugin';
 import assetHandlerManager from './asset-handler';
+import { setFileSystemProvider as setCLIFileSystemProvider } from './filesystem';
 import i18n from '../../base/i18n';
 import Utils from '../../base/utils';
 import assetConfig from '../asset-config';
@@ -49,6 +51,11 @@ interface IWaitingTaskInfo {
 class AssetDBManager extends EventEmitter {
     public assetDBMap: Record<string, assetdb.AssetDB> = {};
     public globalInternalLibrary = false;
+
+    public setFileSystemProvider(provider: IAssetFileSystemProvider) {
+        setCLIFileSystemProvider(provider);
+        assetdb.setFileSystemProvider(provider);
+    }
 
     private hasPause = false;
     private startPause = false;
@@ -273,7 +280,7 @@ class AssetDBManager extends EventEmitter {
         console.debug(`create db ${info.name} success in ${info.library}`);
 
          // 初始化一些脚本需要的数据库信息
-         scripting.updateDatabases({dbID: info.name, target: info.target}, DBChangeType.add);
+         await scripting.updateDatabases({dbID: info.name, target: info.target}, DBChangeType.add);
         return db;
     }
 
@@ -762,24 +769,31 @@ async function afterStartDB(dbInfoMap: Record<string, IAssetDBInfo>) {
     // 启动数据库后，打开 effect 导入后的自动重新生成 effect.bin 开关
     await assetHandlerManager.startAutoGenEffectBin();
 
-    // 脚本系统未触发构建，启动脚本构建流程
-    if (!scripting.isTargetReady('editor')) {
+    // Sync all script assets to packer-driver after databases are started.
+    //
+    // In the Editor, packer-driver receives script notifications via Editor.Message broadcasts
+    // (asset-db:asset-add/change/delete) which fire regardless of cache state.
+    // In CLI preview, there is no broadcast mechanism — packer-driver relies on compileScripts()
+    // calls from importers. When useCache is true (or import order varies), some scripts may not
+    // trigger compileScripts(), leaving packer-driver unaware of them.
+    //
+    // This batch sync mirrors the Editor's fetchAll() behavior: query all cc.Script assets
+    // and notify packer-driver. _prerequisiteAssetMods is a Set, so duplicates are harmless.
+    {
         const options: QueryAssetsOption = {
             ccType: 'cc.Script',
         };
-        // TODO 底层 assetDB 支持查询过滤后，就可以移除这里的 globalThis.assetQuery
         const assetInfos = globalThis.assetQuery.queryAssetInfos(options, ['meta', 'url', 'file', 'importer', 'type']) as IAssetInfo[];
-        for (const assetInfo of assetInfos) {
-            const assetChange: AssetChangeInfo = {
-                type: AssetActionEnum.add,
-                uuid: assetInfo.uuid,
-                filePath: assetInfo.file,
-                importer: assetInfo.importer,
-                userData: assetInfo.meta?.userData || {},
-            };
+        const changes: AssetChangeInfo[] = assetInfos.map(assetInfo => ({
+            type: AssetActionEnum.add,
+            uuid: assetInfo.uuid,
+            filePath: assetInfo.file,
+            importer: assetInfo.importer,
+            userData: assetInfo.meta?.userData || {},
+        }));
+        if (changes.length > 0) {
             try {
-                // 编译报错会抛异常，不能影响启动流程
-                await scripting.compileScripts([assetChange]);
+                await scripting.compileScripts(changes);
             } catch (error) {
                 console.error(error);
             }

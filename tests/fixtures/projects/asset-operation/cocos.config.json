@@ -1,5 +1,5 @@
 {
-    "$schema": "./temp/cli/cocos.config.schema.json",
+    "$schema": "./temp/cocos.config.schema.json",
     "version": "1.0.0",
     "builder": {
         "platforms": {
@@ -131,10 +131,6 @@
                                     "compressionType": "subpackage",
                                     "isRemote": false
                                 },
-                                "xiaomi-quick-game": {
-                                    "compressionType": "subpackage",
-                                    "isRemote": false
-                                },
                                 "vivo-mini-game": {
                                     "compressionType": "merge_all_json",
                                     "isRemote": false
@@ -214,10 +210,6 @@
                                     "compressionType": "subpackage",
                                     "isRemote": false
                                 },
-                                "xiaomi-quick-game": {
-                                    "compressionType": "subpackage",
-                                    "isRemote": false
-                                },
                                 "baidu-mini-game": {
                                     "compressionType": "subpackage",
                                     "isRemote": false
@@ -292,10 +284,6 @@
                                     "compressionType": "zip",
                                     "isRemote": true
                                 },
-                                "xiaomi-quick-game": {
-                                    "compressionType": "zip",
-                                    "isRemote": true
-                                },
                                 "baidu-mini-game": {
                                     "compressionType": "zip",
                                     "isRemote": true
@@ -355,10 +343,6 @@
                                     "isRemote": false
                                 },
                                 "vivo-mini-game": {
-                                    "compressionType": "subpackage",
-                                    "isRemote": false
-                                },
-                                "xiaomi-quick-game": {
                                     "compressionType": "subpackage",
                                     "isRemote": false
                                 },
@@ -429,10 +413,6 @@
                                     "isRemote": false
                                 },
                                 "vivo-mini-game": {
-                                    "compressionType": "subpackage",
-                                    "isRemote": false
-                                },
-                                "xiaomi-quick-game": {
                                     "compressionType": "subpackage",
                                     "isRemote": false
                                 },
@@ -514,10 +494,6 @@
                                     "compressionType": "merge_dep",
                                     "isRemote": false
                                 },
-                                "xiaomi-quick-game": {
-                                    "compressionType": "merge_dep",
-                                    "isRemote": false
-                                },
                                 "link-sure": {
                                     "compressionType": "merge_dep",
                                     "isRemote": false
@@ -589,10 +565,6 @@
                                     "isRemote": false
                                 },
                                 "vivo-mini-game": {
-                                    "compressionType": "merge_dep",
-                                    "isRemote": false
-                                },
-                                "xiaomi-quick-game": {
                                     "compressionType": "merge_dep",
                                     "isRemote": false
                                 },
@@ -1229,6 +1201,51 @@
         "fbx": {
             "legacyFbxImporter": {
                 "visible": true
+            }
+        }
+    },
+    "scene": {
+        "gizmo": {
+            "is2D": false,
+            "is3DIcon": false,
+            "iconSize": 2,
+            "transformToolName": "position",
+            "viewMode": "select",
+            "pivot": "pivot",
+            "coordinate": "local",
+            "toolsVisibility3d": true,
+            "gridVisible": true,
+            "gridColor": [
+                166,
+                166,
+                166,
+                255
+            ],
+            "originAxis2D": {
+                "x": true,
+                "y": true,
+                "z": false
+            },
+            "originAxis3D": {
+                "x": true,
+                "y": false,
+                "z": true
+            },
+            "rectSnapConfig": {
+                "enableSnapping": true,
+                "snapThreshold": 4
+            },
+            "snapConfigs": {
+                "position": {
+                    "x": 1,
+                    "y": 1,
+                    "z": 1
+                },
+                "rotation": 1,
+                "scale": 1,
+                "isPositionSnapEnabled": false,
+                "isRotationSnapEnabled": false,
+                "isScaleSnapEnabled": false
             }
         }
     }

@@ -8,15 +8,38 @@ window.Editor = {
         request: async function (target, method, uuid) {
             if (method === 'query-asset-info') {
                 return await fetch(`${serverUrl}/query-asset-info/${uuid}`)
-                    .then(function (r) { return r.json(); })
-                    .catch(function () { return ''; });
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .catch(function () { return null; });
             } else if (method === 'query-engine-info') {
                 return await fetch(`${serverUrl}/engine/query-engine-info`)
-                    .then(function (r) { return r.json(); })
-                    .catch(function () { return ''; });
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .catch(function () { return null; });
             }
             return Promise.resolve(null);
         },
+    },
+    Selection: {
+        getSelected: function (_type) { return []; },
+        getLastSelected: function (_type) { return ''; },
+        select: function (_type, _uuid) {},
+        unselect: function (_type, _uuid) {},
+        clear: function (_type) {},
+    },
+    Profile: {
+        load: function () { return Promise.resolve({}); },
+        getConfig: function () { return undefined; },
+        setConfig: function () {},
+    },
+    Panel: {
+        open: function () {},
+        close: function () {},
+    },
+    Utils: {
+        refreshSelectedInspector: function () {},
+    },
+    Clipboard: {
+        read: function () { return ''; },
+        write: function () {},
     },
 };
 
@@ -82,85 +105,3 @@ if (typeof window.require === 'undefined') {
     };
     window.require.cache = {};
 }
-
-window.EditorExtends = {
-    emit: function () { },
-    on: function () { },
-    off: function () { },
-    removeListener: function () { },
-    UuidUtils: {
-        uuid: function () { return ''; },
-        compressUuid: function (u) { return u; },
-        compressUUID: function (u) { return u; },
-        decompressUuid: function (u) { return u; },
-        isUuid: function () { return false; },
-    },
-    Component: {
-        allow: false,
-        addMenu: function () { },
-        removeMenu: function () { },
-        getMenus: function () { return []; },
-        add: function () { },
-        remove: function () { },
-        clear: function () { },
-        getComponent: function () { return null; },
-        getComponentFromPath: function () { return null; },
-        getPathFromUuid: function () { return ''; },
-        getComponents: function () { return {}; },
-        changeUUID: function () { },
-        emit: function () { },
-        on: function () { },
-        off: function () { },
-        removeListener: function () { },
-    },
-    Node: {
-        allow: false,
-        add: function () { },
-        remove: function () { },
-        clear: function () { },
-        updateNodeName: function () { },
-        getNode: function () { return null; },
-        getNodeByPath: function () { return null; },
-        getNodePath: function () { return ''; },
-        getNodeUuidByPath: function () { return null; },
-        getNodeByPathOrThrow: function () { throw new Error('Not implemented'); },
-        getNodeUuidByPathOrThrow: function () { throw new Error('Not implemented'); },
-        getNodes: function () { return {}; },
-        getNodesByAsset: function () { return []; },
-        getNodesInScene: function () { return {}; },
-        changeNodeUUID: function () { },
-        emit: function () { },
-        on: function () { },
-        off: function () { },
-        removeListener: function () { },
-    },
-    Script: {
-        allow: false,
-        add: function () { },
-        remove: function () { },
-        getCtors: function () { return []; },
-        emit: function () { },
-        on: function () { },
-        off: function () { },
-        removeListener: function () { },
-    },
-    MissingReporter: {
-        classInstance: (function () {
-            const finder = function (type, data, owner, propName) {
-                // Resolve class by type ID, same as cc.js.getClassById
-                return cc && cc.js ? cc.js.getClassById(type) : null;
-            };
-            finder.onDereferenced = function () { };
-            return {
-                classFinder: finder,
-                reportMissingClass: function () { },
-                reset: function () { },
-            };
-        })(),
-        class: null,
-        object: function () { return { stashByOwner: function () { } }; },
-    },
-    serialize: {
-        asAsset: function (uuid) { return uuid; },
-    },
-};

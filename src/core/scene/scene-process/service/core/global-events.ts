@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { SceneProcessEventTag } from '../../../common';
 
 // 全局共享的 EventEmitter 实例（内部使用，不对外暴露）
-const globalEventEmitter = new EventEmitter();
+export const globalEventEmitter = new EventEmitter();
 
 /**
  * 全局事件管理器
@@ -108,7 +108,7 @@ class GlobalEventManager {
             args: [...args]
         };
         globalEventEmitter.emit(event, ...args);
-        if ('connected' in process) {
+        if ('connected' in process && process.connected) {
             process.send?.(message);
         }
     }
@@ -125,6 +125,8 @@ class GlobalEventManager {
         }
     }
 }
+
+export { GlobalEventManager };
 
 // 导出全局单例
 export const ServiceEvents = new GlobalEventManager();

@@ -69,7 +69,10 @@ export const SUPPORT_CREATE_TYPES = [
     'scene',                   // 场景
     'prefab',                  // 预制体
     'material',                // 材质
-    // 'texture-cube',            // 立方体贴图
+    // The upstream texture-cube template requires engine >= 4.0.0-alpha.21.
+    // This fork still carries engine alpha.13 custom patches, so keep creation
+    // disabled until those patches are rebased onto a compatible engine.
+    // 'texture-cube',         // 立方体贴图
     'terrain',                 // 地形
     'physics-material',        // 物理材质
     'label-atlas',             // 标签图集

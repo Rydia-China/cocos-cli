@@ -123,6 +123,12 @@ export const SchemaQueryAssetsOption = z.object({
 export const SchemaSupportCreateType = z.enum(SUPPORT_CREATE_TYPES as any).describe('Supported asset handler types for creation'); // 支持创建的资源处理器类型
 export const SchemaTargetPath = z.string().min(1).describe('Target path, asset will be created or imported to this path'); // 目标路径，资源将被创建或导入到此路径
 export const SchemaBaseName = z.string().min(1).describe('Base name, asset will be created or imported to this name'); // 基础名称，资源将被创建或导入到此名称
+export const SchemaAssetNewName = z.string()
+    .min(1)
+    .refine((value) => value !== '.' && value !== '..' && !value.startsWith('db://') && !/[\\/]/.test(value), {
+        message: 'New name must be a single file or directory name, not a path',
+    })
+    .describe('New asset name in the current directory. For file assets, include the file extension.'); // 新的资源名称，仅用于当前目录下重命名；文件资源需要包含后缀名
 export const SchemaAssetOperationOption = z.object({
     overwrite: z.boolean().optional().describe('Whether to force overwrite existing files, default false'), // 是否强制覆盖已存在的文件，默认 false
     rename: z.boolean().optional().describe('Whether to automatically rename conflicting files, default false'), // 是否自动重命名冲突文件，默认 false
@@ -141,8 +147,8 @@ export const SchemaCreateAssetOptions = z.object({
     overwrite: z.boolean().optional().describe('Whether to force overwrite existing files, default false'), // 是否强制覆盖已存在的文件，默认 false
     rename: z.boolean().optional().describe('Whether to automatically rename conflicting files, default false'), // 是否自动重命名冲突文件，默认 false
     content: z.string().optional().describe('Asset content, supports string and Buffer types, when both content and template are passed, content is used first to create file, creates folder when not passed'), // 资源内容，支持字符串和 Buffer 类型，当 content 与 template 都传递时，优先使用 content 创建文件，不传递时创建文件夹
-    target: z.string().min(1).describe('Output address for asset creation, supports absolute path and url'), // 资源创建的输出地址，支持绝对路径和 url
-    template: z.string().min(1).optional().describe('Asset file template address, e.g. db://xxx/ani, supports url and absolute path'), // 资源文件模板地址，例如 db://xxx/ani，支持 url 与绝对路径
+    target: z.string().min(1).describe('Output address for asset creation. Prefer an asset-db URL starting with db://, for example db://assets/scripts/GameManager.ts. You may also pass an absolute file path inside an asset database root such as the project assets directory.'), // 资源创建的输出地址。优先使用 db:// 开头的 asset-db URL，例如 db://assets/scripts/GameManager.ts。也可以传位于项目资源数据库根目录内的绝对路径。
+    template: z.string().min(1).optional().describe('Asset file template address. Use an asset-db URL starting with db://, for example db://internal/default_file_content/animation.anim, or an absolute file path to an existing template file. This is not a web URL.'), // 资源文件模板地址。使用 db:// 开头的 asset-db URL，例如 db://internal/default_file_content/animation.anim，或指向现有模板文件的绝对路径；不是 Web URL。
     uuid: z.string().min(1).optional().describe('Specify uuid, since uuid may also conflict, uuid will be automatically reassigned when conflict occurs'), // 指定 uuid ，由于 uuid 也有概率冲突，uuid 冲突时会自动重新分配 uuid
     userData: z.record(z.string().min(1), SchemaJsonValue).optional().describe('Some userData default configuration values specified when creating new asset'), // 新建资源时指定的一些 userData 默认配置值
     customOptions: z.record(z.string().min(1), SchemaJsonValue).optional().describe('Pass some custom configuration information, can be used in custom asset handler'), // 传递一些自定义配置信息，可以在自定义资源处理器内使用
@@ -152,7 +158,64 @@ export const SchemaCreateAssetOptions = z.object({
 export const SchemaSourcePath = z.string().min(1).describe('Source file path, location of asset file to import'); // 源文件路径，要导入的资源文件位置
 
 // Asset save related // 资源保存相关
-export const SchemaAssetData = z.string().min(1).describe('Asset data to save, can be string or Buffer'); // 要保存的资源数据，可以是字符串或 Buffer
+export const SchemaSaveAssetPath = SchemaUrlOrUUIDOrPath.describe('Required existing asset URL, UUID, or file path to save. This must refer to an asset that already exists in the asset database.'); // 保存已有资源时使用的 URL、UUID 或文件路径
+export const SchemaAssetData = z.string().min(1).describe('Required complete file content to save. Do not omit this field, pass an empty string, or pass partial/truncated script content.'); // 要保存的完整资源数据
+
+// Serialized asset data related // 序列化资源数据相关
+export const SchemaSerializedAssetProperty: z.ZodType<any> = z.lazy(() => z.object({
+    name: z.string().optional().describe('Property name'), // 属性名
+    value: z.any().describe('Property value or nested property map'), // 属性值或嵌套属性映射
+    default: z.any().optional().describe('Default value'), // 默认值
+    type: z.string().optional().describe('Cocos class or value type'), // Cocos 类或值类型
+    path: z.string().optional().describe('Dump property path'), // dump 属性路径
+    readonly: z.boolean().optional().describe('Whether property is read-only'), // 是否只读
+    visible: z.boolean().optional().describe('Whether property is visible'), // 是否可见
+    isArray: z.boolean().optional().describe('Whether property value is an array'), // 是否数组
+    enumList: z.array(z.unknown()).optional().describe('Enum option list'), // 枚举选项列表
+    optionalTypes: z.array(z.string()).optional().describe('Optional concrete types for variable type properties'), // 可变类型的可选类型列表
+    elementTypeData: z.lazy(() => SchemaSerializedAssetProperty).optional().describe('Default dump data for array elements'), // 数组元素默认 dump
+}).passthrough().describe('Creator-compatible serialized asset IProperty dump'));
+
+export const SchemaSerializedAssetDump = z.union([
+    z.record(z.string(), SchemaSerializedAssetProperty),
+    SchemaSerializedAssetProperty,
+]).describe('Creator-compatible serialized asset dump. PhysicsMaterial returns a property map, RenderPipeline returns a top-level IProperty.');
+
+export const SchemaSerializedAssetPatch = z.union([
+    SchemaSerializedAssetDump,
+    z.record(z.string(), z.any()),
+]).describe('Serialized asset patch. Prefer IProperty or full dump patches; raw value maps are accepted only for convenience.');
+
+// Material API related // Material API 相关
+export const SchemaMaterialEffectNameOrUuid = z.string().min(1).describe('Effect UUID, asset URL/path, or effect name');
+export const SchemaMaterialEffectInfo = z.object({
+    uuid: z.string().min(1).describe('Effect asset UUID'),
+    name: z.string().describe('Effect name'),
+    hideInEditor: z.boolean().optional().describe('Whether this effect should be hidden in editor UI'),
+    assetPath: z.string().describe('Effect asset file path or URL'),
+}).describe('Material effect list item');
+
+export const SchemaMaterialPassDump = z.object({
+    index: z.number().int().nonnegative().describe('Pass index'),
+    name: z.string().optional().describe('Pass name'),
+    phase: z.string().optional().describe('Render phase'),
+    switch: SchemaSerializedAssetProperty.optional().describe('Pass switch define dump'),
+    propertyIndex: SchemaSerializedAssetProperty.describe('Property source pass index dump'),
+    props: z.array(SchemaSerializedAssetProperty).describe('Material property dumps'),
+    defines: z.array(SchemaSerializedAssetProperty).describe('Material define dumps'),
+    states: SchemaSerializedAssetProperty.describe('Pipeline state dump'),
+}).describe('Material pass dump');
+
+export const SchemaMaterialTechniqueDump = z.object({
+    name: z.string().optional().describe('Technique name'),
+    passes: z.array(SchemaMaterialPassDump).describe('Technique pass dumps'),
+}).describe('Material technique dump');
+
+export const SchemaMaterialDump = z.object({
+    effect: z.string().min(1).describe('Referenced effect UUID'),
+    technique: z.number().int().nonnegative().describe('Selected technique index'),
+    data: z.array(SchemaMaterialTechniqueDump).describe('Technique dump list'),
+}).describe('Creator-compatible Material dump');
 
 // Return value Schema // 返回值 Schema
 export const SchemaAssetInfoResult = SchemaAssetInfo.nullable().describe('Asset detailed information object, including name, type, path, UUID, etc.'); // 资源详细信息对象，包含名称、类型、路径、UUID 等字段
@@ -164,10 +227,36 @@ export const SchemaCreatedAssetResult = SchemaAssetInfo.nullable().describe('Cre
 export const SchemaImportedAssetResult = z.array(SchemaAssetInfo).describe('Imported asset information array, includes folder and all its sub-assets information when importing folder'); // 导入的资源信息数组，当导入文件夹时会包含文件夹及其所有子资源的信息
 export const SchemaReimportResult = SchemaAssetInfo.nullable().describe('Re-import operation result'); // 重新导入操作结果
 export const SchemaSaveAssetResult = SchemaAssetInfo.nullable().describe('Asset information object after saving asset'); // 保存资源后的资源信息对象
+export const SchemaSerializedAssetResult = z.object({
+    uuid: z.string().describe('Asset UUID'), // 资源 UUID
+    url: z.string().describe('Asset db URL'), // 资源 db URL
+    type: z.string().describe('Cocos asset type'), // Cocos 资源类型
+    importer: z.string().describe('Asset importer name'), // 资源导入器名称
+    dump: SchemaSerializedAssetDump.describe('Creator-compatible raw dump'), // Creator 兼容 raw dump
+}).nullable().describe('Serialized asset query/save result'); // 序列化资源 query/save 结果
+export const SchemaMaterialEffectsResult = z.record(z.string(), SchemaMaterialEffectInfo).describe('Available material effects keyed by effect UUID');
+export const SchemaMaterialEffectResult = z.array(SchemaMaterialTechniqueDump).describe('Material effect technique dump list');
+export const SchemaMaterialResult = SchemaMaterialDump.describe('Material dump result');
 export const SchemaRefreshDirResult = z.null().describe('Refresh asset directory result'); // 刷新资源目录结果
 export const SchemaUUIDResult = z.string().nullable().describe('Unique identifier UUID of the asset'); // 资源的唯一标识符 UUID
 export const SchemaPathResult = z.string().nullable().describe('File system path of the asset'); // 资源的文件系统路径
 export const SchemaUrlResult = z.string().nullable().describe('Database URL address of the asset'); // 资源的数据库 URL 地址
+export const SchemaAnimationMaskJoint: z.ZodType<any> = z.lazy(() => z.object({
+    path: z.string().min(1).describe('Joint path relative to the skeleton root, for example "spine/leftArm"'), // 相对骨骼根节点的关节路径
+    enabled: z.boolean().describe('Whether this joint is enabled in the animation mask'), // 关节是否启用
+    children: z.array(SchemaAnimationMaskJoint).optional().describe('Child joint masks'), // 子关节遮罩
+}));
+export const SchemaAnimationMaskDump = z.object({
+    version: z.literal(1).describe('Animation mask DTO schema version'), // DTO 版本
+    assetUuid: z.string().min(1).describe('AnimationMask asset UUID'), // AnimationMask 资源 UUID
+    joints: z.array(SchemaAnimationMaskJoint).describe('Animation mask joint tree'), // 关节遮罩树
+}).describe('Stable AnimationMask DTO for panel and CLI consumption'); // 面板/CLI 专用稳定 AnimationMask DTO
+export const SchemaAnimationMaskChanges = z.array(z.object({
+    path: z.string().min(1).describe('Joint path to update'), // 要更新的关节路径
+    enabled: z.boolean().describe('New enabled state'), // 新的启用状态
+    recursive: z.boolean().optional().describe('Whether to apply the change to descendant joint paths. Defaults to false.'), // 是否递归更新子树
+})).describe('AnimationMask path patch list'); // AnimationMask 路径 patch 列表
+export const SchemaVoidResult = z.null().describe('No result data'); // 无返回数据
 
 // Asset operation related // 资源操作相关
 export const SchemaQueryAssetType = z.enum(['asset', 'script', 'all']).describe('Query asset type: asset (normal asset), script (script), all (all)'); // 查询资源类型：asset(普通资源)、script(脚本)、all(全部)
@@ -207,6 +296,7 @@ export type TDirOrDbPath = z.infer<typeof SchemaDirOrDbPath>;
 export type TBaseName = z.infer<typeof SchemaBaseName>;
 export type TDbDirResult = z.infer<typeof SchemaDbDirResult>;
 export type TUrlOrUUIDOrPath = z.infer<typeof SchemaUrlOrUUIDOrPath>;
+export type TSaveAssetPath = z.infer<typeof SchemaSaveAssetPath>;
 export type TUUIDOrPath = z.infer<typeof SchemaUUIDOrPath>;
 export type TUrlOrUUID = z.infer<typeof SchemaUrlOrUUID>;
 export type TUrlOrPath = z.infer<typeof SchemaUrlOrPath>;
@@ -214,9 +304,13 @@ export type TDataKeys = z.infer<typeof SchemaDataKeys>;
 export type TQueryAssetsOption = z.infer<typeof SchemaQueryAssetsOption> | undefined;
 export type TSupportCreateType = z.infer<typeof SchemaSupportCreateType>;
 export type TTargetPath = z.infer<typeof SchemaTargetPath>;
+export type TAssetNewName = z.infer<typeof SchemaAssetNewName>;
 export type TAssetOperationOption = z.infer<typeof SchemaAssetOperationOption> | undefined;
 export type TSourcePath = z.infer<typeof SchemaSourcePath>;
 export type TAssetData = z.infer<typeof SchemaAssetData>;
+export type TSerializedAssetPatch = z.infer<typeof SchemaSerializedAssetPatch>;
+export type TMaterialEffectNameOrUuid = z.infer<typeof SchemaMaterialEffectNameOrUuid>;
+export type TMaterialDump = z.infer<typeof SchemaMaterialDump>;
 export type TAssetInfoResult = z.infer<typeof SchemaAssetInfoResult>;
 export type TAssetMetaResult = z.infer<typeof SchemaAssetMetaResult>;
 export type TCreateMapResult = z.infer<typeof SchemaCreateMapResult>;
@@ -228,10 +322,17 @@ export type TCreateAssetOptions = z.infer<typeof SchemaCreateAssetOptions>;
 export type TImportedAssetResult = z.infer<typeof SchemaImportedAssetResult>;
 export type TReimportResult = z.infer<typeof SchemaAssetInfoResult>;
 export type TSaveAssetResult = z.infer<typeof SchemaSaveAssetResult>;
+export type TSerializedAssetResult = z.infer<typeof SchemaSerializedAssetResult>;
+export type TMaterialEffectsResult = z.infer<typeof SchemaMaterialEffectsResult>;
+export type TMaterialEffectResult = z.infer<typeof SchemaMaterialEffectResult>;
+export type TMaterialResult = z.infer<typeof SchemaMaterialResult>;
 export type TRefreshDirResult = z.infer<typeof SchemaRefreshDirResult>;
 export type TUUIDResult = z.infer<typeof SchemaUUIDResult>;
 export type TPathResult = z.infer<typeof SchemaPathResult>;
 export type TUrlResult = z.infer<typeof SchemaUrlResult>;
+export type TAnimationMaskDump = z.infer<typeof SchemaAnimationMaskDump>;
+export type TAnimationMaskChanges = z.infer<typeof SchemaAnimationMaskChanges>;
+export type TVoidResult = z.infer<typeof SchemaVoidResult>;
 export type TQueryAssetType = z.infer<typeof SchemaQueryAssetType>;
 export type TFilterPluginOptions = z.infer<typeof SchemaFilterPluginOptions>;
 export type TPluginScriptInfo = z.infer<typeof SchemaPluginScriptInfo>;
@@ -241,6 +342,9 @@ export type TUpdateUserDataOptions = z.infer<typeof SchemaUpdateUserDataOptions>
 export type TUserDataHandler = z.infer<typeof SchemaUserDataHandler>;
 
 // Update Asset User Data related Schema // Update Asset User Data 相关 Schema
+export const SchemaUpdateAssetUserData = z.record(z.string(), z.any()).describe('Complete asset userData object to replace the existing userData'); // 用于整体替换现有 userData 的完整资源 userData 对象
+export type TUpdateAssetUserData = z.infer<typeof SchemaUpdateAssetUserData>;
+
 export const SchemaUpdateAssetUserDataPath = z.string().min(1).describe('User data path, separated by dots, e.g. "texture.wrapMode"'); // 用户数据路径，使用点号分隔，如 "texture.wrapMode"
 export type TUpdateAssetUserDataPath = z.infer<typeof SchemaUpdateAssetUserDataPath>;
 
@@ -249,12 +353,6 @@ export type TUpdateAssetUserDataValue = z.infer<typeof SchemaUpdateAssetUserData
 
 export const SchemaUpdateAssetUserDataResult = z.any().describe('Updated user data object'); // 更新后的用户数据对象
 export type TUpdateAssetUserDataResult = z.infer<typeof SchemaUpdateAssetUserDataResult>;
-
-// Asset Config Map related Schema // Asset Config Map 相关 Schema
-export const SchemaThumbnailInfo = z.object({
-    type: z.enum(['icon', 'image']).describe('Thumbnail type: icon or image'), // 缩略图类型：icon 或 image
-    value: z.string().describe('Specific icon name or image path, supports absolute path, db://, project:// paths'), // 具体 icon 名字或者 image 路径，支持绝对路径、db://、project:// 下的路径
-}).describe('Thumbnail information'); // 缩略图信息
 
 // Recursively defined user data configuration item // 递归定义用户数据配置项
 const SchemaUserDataConfigItem: z.ZodType<any> = z.lazy(() => z.object({
@@ -282,8 +380,42 @@ export const SchemaAssetConfig = z.object({
     description: z.string().optional().describe('Asset description'), // 资源描述
     docURL: z.string().optional().describe('Document URL'), // 文档 URL
     userDataConfig: z.record(z.string(), SchemaUserDataConfigItem).optional().describe('User data configuration'), // 用户数据配置
-    iconInfo: SchemaThumbnailInfo.optional().describe('Icon information'), // 图标信息
 }).describe('Asset configuration information'); // 资源配置信息
 
 export const SchemaAssetConfigMapResult = z.record(z.string(), SchemaAssetConfig).describe('Asset configuration map, key is asset handler name, value is corresponding configuration information'); // 资源配置映射表，键为资源处理器名称，值为对应的配置信息
 export type TAssetConfigMapResult = z.infer<typeof SchemaAssetConfigMapResult>;
+
+export const SchemaAssetPropertySchemaOption = z.object({
+    label: z.string().describe('Option display label'), // 选项显示名称
+    value: z.union([z.string(), z.number(), z.boolean()]).describe('Option value'), // 选项值
+}).describe('Asset property schema option'); // 资源属性 schema 选项
+
+export const SchemaAssetPropertySchema: z.ZodType<any> = z.lazy(() => z.object({
+    label: z.string().describe('Property display label'), // 属性显示名称
+    description: z.string().optional().describe('Property description'), // 属性描述
+    type: z.enum(['string', 'number', 'boolean', 'enum', 'asset', 'array', 'object']).describe('Property value/control type'), // 属性值或控件类型
+    default: z.any().optional().describe('Static default value'), // 静态默认值
+    options: z.array(SchemaAssetPropertySchemaOption).optional().describe('Enum/select options'), // 枚举/下拉选项
+    assetType: z.string().optional().describe('Allowed Cocos asset type for asset picker'), // Asset Picker 允许的 Cocos 资源类型
+    min: z.number().optional().describe('Minimum number value'), // 数值最小值
+    max: z.number().optional().describe('Maximum number value'), // 数值最大值
+    step: z.number().optional().describe('Number input step'), // 数值步进
+    readOnly: z.boolean().optional().describe('Whether the property is read-only'), // 是否只读
+    order: z.number().optional().describe('Display order'), // 展示顺序
+    properties: z.record(z.string(), SchemaAssetPropertySchema).optional().describe('Nested object properties'), // 嵌套对象属性
+    items: z.union([SchemaAssetPropertySchema, z.array(SchemaAssetPropertySchema)]).optional().describe('Array item schema'), // 数组元素 schema
+}).describe('Standardized asset import property schema')); // 标准化资源导入属性 schema
+
+export const SchemaAssetPropertySchemaResult = z.record(z.string(), SchemaAssetPropertySchema).describe('Asset import property schema map, key is property name'); // 资源导入属性 schema 映射
+export type TAssetPropertySchemaResult = z.infer<typeof SchemaAssetPropertySchemaResult>;
+
+export const SchemaAnimationGraphVariantDump = z.object({
+    graphUuid: z.string().min(1).nullable().describe('UUID of the referenced AnimationGraph asset. Null clears the graph reference.'),
+    clips: z.record(z.string().min(1), z.string()).describe('Animation clip override map: original clip UUID to substitute clip UUID. Empty substitute means no override.'),
+    invalids: z.record(z.string().min(1), z.string()).optional().describe('Saved override entries whose original clip is not found in the current graph. These entries are returned for display only and are not saved.'),
+}).describe('AnimationGraphVariant editable dump');
+export const SchemaAnimationGraphVariantResult = SchemaAnimationGraphVariantDump.describe('AnimationGraphVariant editable dump result');
+export const SchemaAnimationGraphVariantSaveResult = z.null().describe('AnimationGraphVariant save result');
+export type TAnimationGraphVariantDump = z.infer<typeof SchemaAnimationGraphVariantDump>;
+export type TAnimationGraphVariantResult = z.infer<typeof SchemaAnimationGraphVariantResult>;
+export type TAnimationGraphVariantSaveResult = z.infer<typeof SchemaAnimationGraphVariantSaveResult>;

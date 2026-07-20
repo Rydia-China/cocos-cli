@@ -1,5 +1,6 @@
 import type { Node, Component } from 'cc';
 import { ServiceEvents } from './global-events';
+import type { InternalServiceEventName } from './internal-events';
 import type { IChangeNodeOptions } from '../../../common';
 
 export interface IServiceEvents {
@@ -26,6 +27,8 @@ export interface IServiceEvents {
     onSetPropertyComponent?(comp: Component): void;
     onComponentAdded?(comp: Component): void;
     onComponentRemoved?(comp: Component): void;
+    onBeforeChangeComponent?(node: Node): void;
+    onBeforeAddComponent?(name:string, node: Node): void;
     onBeforeRemoveComponent?(comp: Component): void;
 
     // Asset events
@@ -35,6 +38,11 @@ export interface IServiceEvents {
 
     // Script events
     onScriptExecutionFinished?(): void;
+
+    // Selection events
+    onSelectionSelect?(path: string, paths: string[]): void;
+    onSelectionUnselect?(path: string, paths: string[]): void;
+    onSelectionClear?(): void;
 }
 
 export class BaseService<TEvents extends Record<string, any>> {
@@ -49,6 +57,13 @@ export class BaseService<TEvents extends Record<string, any>> {
         ...args: TEvents[K]
     ) {
         ServiceEvents.emit(event as string, ...args);
+    }
+
+    /**
+     * 只在场景进程内部转发的服务事件，不进入公共事件声明。
+     */
+    protected emitInternal(event: InternalServiceEventName, ...args: any[]): void {
+        ServiceEvents.emit(event, ...args);
     }
 
     /**

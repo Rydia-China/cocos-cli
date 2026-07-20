@@ -7,19 +7,69 @@ on:
     types: [created]
 
 jobs:
-  pr-test:
-    # 运行条件：
-    # 1. PR 事件
-    # 2. 评论触发 (包含 "rerun pr test"，包括 "rerun pr test:debug")
+  check-changes:
+    # 检查是否有需要运行 pr-test 的文件变更
     if: |
       github.event_name == 'pull_request' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'rerun pr test'))
-    
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.filter.outputs.should_run }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || github.ref }}
+
+      - name: Check changed files
+        id: filter
+        shell: bash
+        run: |
+          # 评论触发时始终运行
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BASE_REF="origin/${{ github.base_ref }}"
+          CHANGED_FILES=$(git diff --name-only "$BASE_REF"...HEAD)
+
+          # 仅 dts/snapshot 相关文件变更时跳过 pr-test
+          DTS_ONLY=true
+          while IFS= read -r file; do
+            case "$file" in
+              .github/workflows/check-dts.yml|\
+              .github/workflows/publish-dts.yml|\
+              packages/cocos-cli-types/*|\
+              packages/cocos-cli-types/**/*) ;;
+              *) DTS_ONLY=false; break ;;
+            esac
+          done <<< "$CHANGED_FILES"
+
+          if [ "$DTS_ONLY" = "true" ]; then
+            echo "Only dts-related files changed, skipping pr-test."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  pr-test:
+    needs: check-changes
+    if: needs.check-changes.outputs.should_run == 'true'
+
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
+        # Windows native build still uses the bundled CMake 3.24.3 and VS2022 generator.
+        os: [windows-2022, macos-latest]
 
     runs-on: ${{matrix.os}}
+
+    # 抬高 Node 堆上限：E2E 会 spawn dist/cli.js 在 fixture 上编译整个引擎，默认 ~2GB 堆偏紧，
+    # macOS runner 上易 OOM（Ineffective mark-compacts near heap limit）。NODE_OPTIONS 会被
+    # 所有子进程（jest / 被 spawn 的 CLI）继承。
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
 
     steps:
       - name: Checkout code
@@ -42,11 +92,17 @@ jobs:
       
       - name: Setup environment
         uses: ./.github/actions/setup-env
-      
+        env:
+          MINIMAL_DOWNLOAD_TOOLS: 'true'
+
+      - name: Type check
+        id: type-check
+        run: npx tsc -b
+
       - name: Run unit tests
         id: unit-tests
         run: npm run test:quiet
-      
+
       - name: Run E2E tests
         id: e2e-tests
         uses: ./.github/actions/run-e2e-tests

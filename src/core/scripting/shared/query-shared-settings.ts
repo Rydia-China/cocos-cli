@@ -8,6 +8,7 @@ import { existsSync } from 'fs';
 import { configurationRegistry, ConfigurationScope, IBaseConfiguration } from '../../configuration';
 import Utils from '../../base/utils';
 import { ScriptProjectConfig } from '../@types/config-export';
+import { createScriptMetadataNodes } from './metadata';
 
 export interface SharedSettings extends Pick<ScriptProjectConfig, 'useDefineForClassFields' | 'allowDeclareFields' | 'loose' | 'guessCommonJsExports' | 'exportsConditions'> {
     useDefineForClassFields: boolean;
@@ -29,6 +30,7 @@ export function getDefaultSharedSettings(): ScriptProjectConfig {
         loose: false,
         guessCommonJsExports: false,
         exportsConditions: [],
+        sortingPlugin: [],
         preserveSymlinks: false,
         importMap: '',
         previewBrowserslistConfigFile: '',
@@ -50,7 +52,10 @@ class ScriptConfig {
         if (this._init) {
             return;
         }
-        this._configInstance = await configurationRegistry.register('script', getDefaultSharedSettings());
+        this._configInstance = await configurationRegistry.register('script', {
+            defaults: getDefaultSharedSettings(),
+            nodes: () => createScriptMetadataNodes(),
+        });
         this._init = true;
     }
 
@@ -58,8 +63,13 @@ class ScriptConfig {
         return this._configInstance.get<T>(path, scope);
     }
 
-    setProject(path: string, value: any, scope?: ConfigurationScope) {
-        return this._configInstance.set(path, value, scope);
+    async setProject(path: string, value: any, scope?: ConfigurationScope) {
+        const result = await this._configInstance.set(path, value, scope);
+        if (path === 'sortingPlugin') {
+            const { default: assetConfig } = await import('../../assets/asset-config');
+            assetConfig.setSortingPlugin(value);
+        }
+        return result;
     }
 }
 

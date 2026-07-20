@@ -1,20 +1,19 @@
 'use strict';
-import { Node, Component, js, CCClass } from 'cc';
+import { Node, Component, js, CCClass, Scene } from 'cc';
 import { parsingPath } from './utils';
+import get from 'lodash/get';
 import AssetUtil from './asset';
-import { decodePatch, resetProperty, updatePropertyFromNull } from './decode';
-import { encodeObject, encodeComponent } from './encode';
-import { IComponent } from '../../../common';
-
-// import * as dumpDecode from './decode';
-const { get } = require('lodash');
+import { decodePatch, decodeNode, decodeScene, resetProperty, updatePropertyFromNull } from './decode';
+import { encodeObject, encodeComponent, encodeScene, encodeNode } from './encode';
+import { IComponent, INode, IScene } from '../../../common';
+import { NODE_SNAPSHOT_RESTORE_PROPERTY_PATHS, COMPONENT_SNAPSHOT_RESTORE_SKIP_KEYS } from './restore-policy';
 
 // dump接口,统一下全局引用
 class DumpUtil {
     // 获取节点的某个属性
     dumpProperty(node: Node, path: string) {
         if (path === '') {
-            //return this.dumpNode(node);
+            return this.dumpNode(node);
         }
         // 通过路径找到对象，然后dump这个对象
         const info = parsingPath(path, node);
@@ -23,6 +22,21 @@ class DumpUtil {
         const attr = CCClass.Attr.getClassAttrs(data.constructor);
         const ret = encodeObject(data, attr);
         return ret;
+    }
+
+    /**
+     * 生成一个 node 的 dump 数据
+     * @param {*} node
+     */
+    dumpNode(node: Node, options: { includeComponents?: boolean } = {}): INode | IScene | null {
+        if (!node) {
+            return null;
+        }
+        if (node instanceof Scene) {
+            return encodeScene(node);
+        }
+        return encodeNode(node, options);
+
     }
 
     // 生成一个component的dump数据
@@ -75,6 +89,18 @@ class DumpUtil {
     }
 
     /**
+     * 还原一个节点的全部属性
+     * @param {*} node
+     * @param {*} dump
+     */
+    async restoreNode(node: Node, dump: any) {
+        if (dump && dump.isScene) {
+            return await decodeScene(dump, node);
+        }
+        return await decodeNode(dump, node);
+    }
+
+    /**
      * 解析节点的访问路径
      * @param path 
      * @returns 
@@ -86,8 +112,8 @@ class DumpUtil {
     /**
      * encodeObject
      */
-    encodeObject(object: any, attributes: any, owner: any = null, objectKey?: string) {
-        return encodeObject(object, attributes, owner, objectKey);
+    encodeObject(object: any, attributes: any, owner: any = null, objectKey?: string, isTemplate?: boolean) {
+        return encodeObject(object, attributes, owner, objectKey, isTemplate);
     }
 
     /**
@@ -105,6 +131,36 @@ class DumpUtil {
             value = ccType ? new ccType() : null;
         }
         return value;
+    }
+
+    /**
+     * 恢复 node snapshot 中的可编辑属性（白名单由 restore-policy 定义）。
+     * 仅处理 dump 数据的属性恢复；name 通知、locked 标志位等 undo 层逻辑不在此处。
+     * @see NODE_SNAPSHOT_RESTORE_PROPERTY_PATHS
+     */
+    async restoreNodeSnapshotProperties(node: Node, dump: any) {
+        for (const path of NODE_SNAPSHOT_RESTORE_PROPERTY_PATHS) {
+            if (dump[path]) {
+                await this.restoreProperty(node, path, dump[path]);
+            }
+        }
+    }
+
+    /**
+     * 恢复 component snapshot 中的用户属性（跳过身份/编辑器字段，黑名单由 restore-policy 定义）。
+     * 不包含 onRestore 生命周期调用等 undo 层逻辑。
+     * @see COMPONENT_SNAPSHOT_RESTORE_SKIP_KEYS
+     */
+    async restoreComponentSnapshotProperties(component: Component, dump: any) {
+        if (!dump?.value) {
+            return;
+        }
+        for (const key in dump.value) {
+            if (COMPONENT_SNAPSHOT_RESTORE_SKIP_KEYS.includes(key as typeof COMPONENT_SNAPSHOT_RESTORE_SKIP_KEYS[number])) {
+                continue;
+            }
+            await this.restoreProperty(component, key, dump.value[key]);
+        }
     }
 
 }

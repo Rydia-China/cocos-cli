@@ -9,11 +9,13 @@ import { recursively } from '../utils';
 import assert from 'assert';
 import { getCCONFormatAssetInLibrary, outputCCONFormat } from '../utils/cconb';
 import { IAssetInfo, IMetaMap, ISerializedOptions, IUuidDependMap, } from '../../../@types/protected';
+import { BundleFilterConfig } from '../../../@types';
 import assetManager from '../../../../assets/manager/asset';
 import { IAsset, QueryAssetsOption, IAssetInfo as IAssetInfoFromDB } from '../../../../assets/@types/protected';
 import assetDBManager from '../../../../assets/manager/asset-db';
-import builderConfig from '../../../share/builder-config';
 import i18n from '../../../../base/i18n';
+import { filterAssetWithBundleConfig } from '../utils/bundle';
+import { initBundleConfig } from '../asset-handler/bundle/utils';
 
 // 版本号记录
 const CACHE_VERSION = '1.0.1';
@@ -42,11 +44,6 @@ class BuildAssetLibrary {
 
     private meta: IMetaMap = {};
 
-    // 缓存地址
-    private cacheTempDir: string = join(builderConfig.projectTempDir, 'asset-db');
-    private assetMtimeCache: Record<string, number> = {};
-    private assetMtimeCacheFile: string = join(builderConfig.projectTempDir, 'builder', 'assets-mtime.json');
-
     // 是否使用缓存开关
     public useCache = true;
 
@@ -65,18 +62,6 @@ class BuildAssetLibrary {
         keepNodeUuid: false, // 序列化后是否保留节点组件的 uuid 数据
     };
 
-    async initMtimeCache() {
-        if (existsSync(this.assetMtimeCacheFile)) {
-            try {
-                this.assetMtimeCache = (await readJSON(this.assetMtimeCacheFile)) || {};
-            } catch (error) { }
-        }
-    }
-
-    async saveMtimeCache() {
-        await outputJSON(this.assetMtimeCacheFile, this.assetMtimeCache);
-    }
-
     /**
      * 资源管理器初始化
      */
@@ -86,7 +71,6 @@ class BuildAssetLibrary {
         this.defaultSerializedOptions.keepNodeUuid = false;
         this.useCache = true;
         console.debug(`init custom config: keepNodeUuid: ${this.defaultSerializedOptions.keepNodeUuid}, useCache: ${this.useCache}`);
-        await this.initMtimeCache();
     }
 
     /**
@@ -114,9 +98,8 @@ class BuildAssetLibrary {
      * @param uuid
      */
     public getAssetTempDirByUuid(uuid: string) {
-        // 缓存目录需要根据 db 目录的不同发生变化
-        const dbName = this.getAsset(uuid)._assetDB.options.name;
-        return join(this.cacheTempDir, dbName, uuid.substr(0, 2), uuid, 'build' + CACHE_VERSION);
+        const asset = this.getAsset(uuid);
+        return join(asset._assetDB.options.temp, uuid.substr(0, 2), uuid, 'build' + CACHE_VERSION);
     }
 
     /**
@@ -159,6 +142,33 @@ class BuildAssetLibrary {
 
     public queryAssetsByOptions(options: QueryAssetsOption): IAsset[] {
         return assetManager.queryAssets(options);
+    }
+
+    /**
+     * 查询指定 Bundle 文件夹中实际会被打包的资源列表
+     * @param uuid Bundle 文件夹的 uuid
+     * @param bundleFilterConfig 可选的过滤配置，不传则使用 Bundle 自身的过滤配置
+     * @returns 符合条件的资源 URL 列表
+     */
+    public queryAssetsInBundle(uuid: string, bundleFilterConfig?: BundleFilterConfig[]): string[] {
+        const bundleAsset = this.getAsset(uuid);
+        if (!bundleAsset) {
+            console.warn(`Can not find bundle asset(${uuid})`);
+            return [];
+        }
+        bundleFilterConfig = bundleFilterConfig || bundleAsset.meta.userData.bundleFilterConfig;
+        const allAssets = this.queryAssetsByOptions({ pattern: bundleAsset.url + '/**/*' });
+        const allAssetInfos: IAssetInfoFromDB[] = [];
+        for (const asset of allAssets) {
+            recursively(asset, (a: IAsset) => {
+                allAssetInfos.push(this.getAssetInfo(a.uuid) as unknown as IAssetInfoFromDB);
+            });
+        }
+        if (!bundleFilterConfig || !bundleFilterConfig.length) {
+            return allAssetInfos.map((info) => info.url);
+        }
+        const configs = initBundleConfig(bundleFilterConfig);
+        return filterAssetWithBundleConfig(allAssetInfos, configs).map((info) => info.url);
     }
 
     public async queryAssetUsers(uuid: string): Promise<string[]> {
@@ -274,7 +284,6 @@ class BuildAssetLibrary {
                 await outputJSON(cacheFile, jsonObject, {
                     spaces: 4,
                 });
-                this.assetMtimeCache[asset.uuid] = assetManager.queryAssetProperty(asset, 'mtime');
             }
         } catch (error) {
             unExpectException(error);
@@ -297,7 +306,7 @@ class BuildAssetLibrary {
         } catch (error) {
             unExpectException(error);
         }
-        const jsonObject = this.getSerializedJSON(uuid, {
+        const jsonObject = await this.getSerializedJSON(uuid, {
             debug,
         });
         if (!jsonObject) {
@@ -305,7 +314,7 @@ class BuildAssetLibrary {
         }
         try {
             await outputJSON(cacheFile, jsonObject);
-            copy(cacheFile, dest);
+            await copy(cacheFile, dest);
         } catch (error) {
             unExpectException(error);
             await outputJSON(dest, jsonObject);
@@ -424,7 +433,7 @@ class BuildAssetLibrary {
         return this.getRawInstanceFromData(data, asset);
     }
 
-    getRawInstanceFromData(data: CCON | Object, asset: IAsset) {
+    getRawInstanceFromData(data: CCON | object, asset: IAsset) {
         const result: {
             asset: CCAsset | null;
             detail: string | null;

@@ -1,4 +1,4 @@
-import { IScene } from './scene';
+import type { IScene } from './scene';
 import type { Node, Scene } from 'cc';
 import type { INode } from '../node';
 import type { ICloseOptions, ICreateOptions, IOpenOptions, IReloadOptions, ISaveOptions } from './options';
@@ -19,10 +19,10 @@ export * from './scene';
  * 事件类型
  */
 export interface IEditorEvents {
-    'editor:open': [];
+    'editor:open': [scene?: any];
     'editor:close': [];
     'editor:save': [];
-    'editor:reload': [];
+    'editor:reload': [scene?: any];
 }
 
 /**

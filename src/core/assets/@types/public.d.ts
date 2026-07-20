@@ -1,4 +1,15 @@
 import { AssetHandlerType, ISupportCreateType, AssetUserDataMap, IAssetType } from './asset-types';
+import type { IProperty } from '../../scene/@types/public';
+export type { IProperty } from '../../scene/@types/public';
+export type {
+    IAssetDeleteOptions,
+    IAssetFileSystemProvider,
+    IAssetOperationContext,
+    IAssetOperationKind,
+    IAssetOperationOrigin,
+    IAssetRenameOptions,
+    IAssetWriteFileOptions,
+} from '@cocos/asset-db/libs/filesystem';
 
 export interface IAssetMeta<T extends ISupportCreateType | 'unknown' = 'unknown'> {
     ver: string;
@@ -14,6 +25,71 @@ export interface IAssetMeta<T extends ISupportCreateType | 'unknown' = 'unknown'
     id?: string;
     name?: string;
 }
+
+export type SerializedAssetDump = Record<string, IProperty> | IProperty;
+export type SerializedAssetPatch = SerializedAssetDump | Partial<Record<string, IProperty | unknown>>;
+
+export interface SerializedAssetQueryResult {
+    uuid: string;
+    url: string;
+    type: string;
+    importer: string;
+    dump: SerializedAssetDump;
+}
+
+export interface MaterialEffectInfo {
+    uuid: string;
+    name: string;
+    hideInEditor?: boolean;
+    assetPath: string;
+}
+
+export interface MaterialPassDump {
+    index: number;
+    name?: string;
+    phase?: string;
+    switch?: IProperty;
+    propertyIndex: IProperty;
+    props: IProperty[];
+    defines: IProperty[];
+    states: IProperty;
+}
+
+export interface MaterialTechniqueDump {
+    name?: string;
+    passes: MaterialPassDump[];
+}
+
+export interface MaterialDump {
+    effect: string;
+    technique: number;
+    data: MaterialTechniqueDump[];
+}
+
+export type AssetPropertySchemaType = 'string' | 'number' | 'boolean' | 'enum' | 'asset' | 'array' | 'object';
+
+export interface AssetPropertySchemaOption {
+    label: string;
+    value: string | number | boolean;
+}
+
+export interface AssetPropertySchema {
+    label: string;
+    description?: string;
+    type: AssetPropertySchemaType;
+    default?: unknown;
+    options?: AssetPropertySchemaOption[];
+    assetType?: string;
+    min?: number;
+    max?: number;
+    step?: number;
+    readOnly?: boolean;
+    order?: number;
+    properties?: Record<string, AssetPropertySchema>;
+    items?: AssetPropertySchema | AssetPropertySchema[];
+}
+
+export type AssetPropertySchemaMap = Record<string, AssetPropertySchema>;
 
 // 如果使用了 datakeys 过滤，请使用此接口定义
 export interface IAssetInfo {
@@ -49,6 +125,7 @@ export interface IAssetInfo {
     mtime?: number; // 资源文件的 mtime
     depends?: string[]; // 依赖的资源 uuid 信息
     dependeds?: string[]; // 被依赖的资源 uuid 信息
+    temp?: string; // 资源临时文件目录
 }
 
 export interface AssetOperationOption {
@@ -56,6 +133,28 @@ export interface AssetOperationOption {
     overwrite?: boolean;
     // 是否自动重命名冲突文件，默认 false ，传递后会以内部规则自动重命名冲突文件，新的文件名可以在返回值中获取
     rename?: boolean;
+}
+
+export interface DeleteAssetOptions {
+    useTrash?: boolean;
+}
+
+export interface AnimationMaskDump {
+    version: 1;
+    assetUuid: string;
+    joints: AnimationMaskJoint[];
+}
+
+export interface AnimationMaskJoint {
+    path: string;
+    enabled: boolean;
+    children?: AnimationMaskJoint[];
+}
+
+export interface AnimationMaskChange {
+    path: string;
+    enabled: boolean;
+    recursive?: boolean;
 }
 
 // Basic information about the resource

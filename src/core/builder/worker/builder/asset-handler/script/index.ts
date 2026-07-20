@@ -34,6 +34,16 @@ interface ImportMapOptions {
     output: string;
 }
 
+const scriptBuilderLogDestMap = new WeakMap<object, string | undefined>();
+const scriptWorkerLogDestKey = '__cocosBuildLogDest';
+
+function getScriptWorkerLogDest(options: unknown) {
+    if (!options || typeof options !== 'object') {
+        return undefined;
+    }
+    return (options as Record<string, string | undefined>)[scriptWorkerLogDestKey];
+}
+
 export class ScriptBuilder {
 
     _scriptOptions!: IScriptOptions;
@@ -88,6 +98,7 @@ export class ScriptBuilder {
         const { scriptOptions, importMapOptions } = this.initTaskOptions(options);
         this._scriptOptions = scriptOptions;
         this._importMapOptions = importMapOptions;
+        scriptBuilderLogDestMap.set(this, options.logDest);
         const ccEnvConstants = await getCCEnvConstants({
             platform: options.buildScriptParam.platform,
             flags: options.buildScriptParam.flags,
@@ -135,8 +146,8 @@ export class ScriptBuilder {
         // 执行静态编译检查
         // 注意：如果在 BuildCommand 中已经执行过，这里会重复执行。
         // 但为了确保脚本编译的安全性，这里强制检查。
-        // 传入 temp/cli/tsconfig.cocos.json，避免使用根目录 tsconfig 导致重复包含 d.ts
-        const tsconfigPath = join(project.path, 'temp', 'cli', 'tsconfig.cocos.json');
+        // 传入 temp/tsconfig.cocos.json，避免使用根目录 tsconfig 导致重复包含 d.ts
+        const tsconfigPath = join(project.path, 'temp', 'tsconfig.cocos.json');
         const checkResult = await runStaticCompileCheck(project.path, true, tsconfigPath);
         if (!checkResult.passed) {
             // 构建失败，抛出错误，错误码为 500
@@ -164,7 +175,7 @@ export class ScriptBuilder {
                 cwd: project.path,
             }
         });
-        const res = await workerManager.runTask('build-script', 'buildScriptCommand', [buildScriptOptions]);
+        const res = await workerManager.runTask('build-script', 'buildScriptCommand', [buildScriptOptions], scriptBuilderLogDestMap.get(this));
         if (res) {
             if (res.scriptPackages) {
                 this.scriptPackages.push(...res.scriptPackages);
@@ -186,7 +197,7 @@ export class ScriptBuilder {
             name: 'build-script',
             path: join(__dirname, './build-script'),
         });
-        return await workerManager.runTask('build-script', 'buildPolyfillsCommand', [options, dest]);
+        return await workerManager.runTask('build-script', 'buildPolyfillsCommand', [options, dest], getScriptWorkerLogDest(options));
     }
 
     static async buildSystemJs(options: IBuildSystemJsOption) {
@@ -194,7 +205,7 @@ export class ScriptBuilder {
             name: 'build-script',
             path: join(__dirname, './build-script'),
         });
-        return await workerManager.runTask('build-script', 'buildSystemJsCommand', [options]);
+        return await workerManager.runTask('build-script', 'buildSystemJsCommand', [options], getScriptWorkerLogDest(options));
     }
 
     static async outputImportMap(importMap: ImportMap, options: IImportMapOptions) {

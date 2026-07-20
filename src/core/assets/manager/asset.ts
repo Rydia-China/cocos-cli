@@ -3,9 +3,13 @@ import assetDBManager from './asset-db';
 import { url2path, url2uuid } from '../utils';
 import EventEmitter from 'events';
 import { AssetManagerEvents, IAsset, IAssetInfo, IAssetDBInfo } from '../@types/private';
+import type { ThumbnailInfo, ThumbnailSize } from '../@types/protected/asset-handler';
 import assetQuery from './query';
 import assetOperation from './operation';
 import assetHandlerManager from './asset-handler';
+import animationGraphVariant from '../animation-graph-variant';
+import * as serializedData from '../serialized-data';
+import * as materialService from '../material-service';
 
 /**
  * 对外暴露一系列的资源查询、操作接口等
@@ -29,6 +33,7 @@ class AssetManager extends EventEmitter {
     encodeAsset = assetQuery.encodeAsset.bind(assetQuery);
     queryAssetProperty = assetQuery.queryAssetProperty.bind(assetQuery);
     queryAssetMeta = assetQuery.queryAssetMeta.bind(assetQuery);
+    querySubAssetName = assetQuery.querySubAssetName.bind(assetQuery);
     queryAssetMtime = assetQuery.queryAssetMtime.bind(assetQuery);
     // ---------- operation ---------
     importAsset = assetOperation.importAsset.bind(assetOperation);
@@ -44,13 +49,32 @@ class AssetManager extends EventEmitter {
     outputExportData = assetOperation.outputExportData.bind(assetOperation);
     createAssetByType = assetOperation.createAssetByType.bind(assetOperation);
     updateUserData = assetOperation.updateUserData.bind(assetOperation);
+    updateUserDataByPath = assetOperation.updateUserDataByPath.bind(assetOperation);
+    querySerializedData = serializedData.querySerializedData;
+    saveSerializedData = serializedData.saveSerializedData;
+    queryMaterial = materialService.queryMaterial;
+    queryMaterialEffect = materialService.queryEffect;
+    queryMaterialAllEffects = materialService.queryAllEffects;
+    saveMaterial = materialService.saveMaterial;
+
+    // ---------- animation graph variant ---------
+    queryAnimationGraphVariant = animationGraphVariant.query.bind(animationGraphVariant);
+    changeAnimationGraphVariant = animationGraphVariant.change.bind(animationGraphVariant);
+    saveAnimationGraphVariant = animationGraphVariant.save.bind(animationGraphVariant);
 
     // ----------- assetHandlerManager ------------
-    queryIconConfigMap = assetHandlerManager.queryIconConfigMap.bind(assetHandlerManager);
     queryAssetConfigMap = assetHandlerManager.queryAssetConfigMap.bind(assetHandlerManager);
+    queryPropertySchema = assetHandlerManager.queryPropertySchema.bind(assetHandlerManager);
     updateDefaultUserData = assetHandlerManager.updateDefaultUserData.bind(assetHandlerManager);
     getCreateMap = assetHandlerManager.getCreateMap.bind(assetHandlerManager);
     queryAssetUserDataConfig = assetHandlerManager.queryUserDataConfig.bind(assetHandlerManager);
+    queryThumbnailHandlers = assetHandlerManager.queryThumbnailHandlers.bind(assetHandlerManager);
+
+    async generateThumbnail(urlOrUUIDOrPath: string, size?: ThumbnailSize): Promise<ThumbnailInfo | null> {
+        const asset = this.queryAsset(urlOrUUIDOrPath);
+        if (!asset) { return null; }
+        return assetHandlerManager.generateThumbnail(asset, size);
+    }
     getEffectBinPath() {
         return assetHandlerManager.getEffectBinPath();
     };
@@ -328,6 +352,7 @@ export interface TypedAssetManager extends EventEmitter {
     encodeAsset: typeof assetQuery.encodeAsset;
     queryAssetProperty: typeof assetQuery.queryAssetProperty;
     queryAssetMeta: typeof assetQuery.queryAssetMeta;
+    querySubAssetName: typeof assetQuery.querySubAssetName;
     queryAssetMtime: typeof assetQuery.queryAssetMtime;
 
     importAsset: typeof assetOperation.importAsset;
@@ -343,13 +368,27 @@ export interface TypedAssetManager extends EventEmitter {
     outputExportData: typeof assetOperation.outputExportData;
     createAssetByType: typeof assetOperation.createAssetByType;
     updateUserData: typeof assetOperation.updateUserData;
+    updateUserDataByPath: typeof assetOperation.updateUserDataByPath;
+    querySerializedData: typeof serializedData.querySerializedData;
+    saveSerializedData: typeof serializedData.saveSerializedData;
+    queryMaterial: typeof materialService.queryMaterial;
+    queryMaterialEffect: typeof materialService.queryEffect;
+    queryMaterialAllEffects: typeof materialService.queryAllEffects;
+    saveMaterial: typeof materialService.saveMaterial;
 
-    queryIconConfigMap: typeof assetHandlerManager.queryIconConfigMap;
+    queryAnimationGraphVariant: typeof animationGraphVariant.query;
+    changeAnimationGraphVariant: typeof animationGraphVariant.change;
+    saveAnimationGraphVariant: typeof animationGraphVariant.save;
+
     queryAssetConfigMap: typeof assetHandlerManager.queryAssetConfigMap;
+    queryPropertySchema: typeof assetHandlerManager.queryPropertySchema;
     updateDefaultUserData: typeof assetHandlerManager.updateDefaultUserData;
     getCreateMap: typeof assetHandlerManager.getCreateMap;
     queryAssetUserDataConfig: typeof assetHandlerManager.queryUserDataConfig;
+    queryThumbnailHandlers: typeof assetHandlerManager.queryThumbnailHandlers;
     getEffectBinPath: typeof assetHandlerManager.getEffectBinPath;
+
+    generateThumbnail(urlOrUUIDOrPath: string, size?: ThumbnailSize): Promise<ThumbnailInfo | null>;
 
     onReady: typeof assetManager.onReady;
     onDBReady: typeof assetManager.onDBReady;

@@ -31,9 +31,18 @@ export interface BundleRenderConfig {
     // TODO 平台插件注册 config 机制
 }
 
+export interface BundleQueryConfig {
+    displayName: string;
+    platformConfigs: Record<string, PlatformBundleConfig>;
+}
+
 export interface PlatformTypeInfo {
     icon: string;
     displayName: string;
+}
+
+export interface BundleConfigItemMap {
+    [platform: string]: BundleConfigItem;
 }
 
 export interface CustomBundleConfigItem {
@@ -46,7 +55,7 @@ export interface CustomBundleConfigItem {
         isRemote?: boolean;
     },
     // 平台覆盖参数
-    overwriteSettings?: Record<string, BundleConfigItem>;
+    overwriteSettings?: BundleConfigItemMap;
     // 配置模式，默认 auto 会自动根据优先级计算结果，fallback 会使用 fallbackOptions
     configMode?: 'auto' | 'fallback' | 'overwrite';
 }

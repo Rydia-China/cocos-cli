@@ -8,7 +8,7 @@
     "engines": {
         "vscode": ">=1.107.1",
         "electron": "39.2.3",
-        "pink": ">=0.0.1.6"
+        "pink": ">=0.0.1.29"
     },
     "bin": {
         "cocos": "dist/cli.js"
@@ -27,15 +27,17 @@
         "check:e2e-coverage": "tsx e2e/scripts/check-coverage.ts",
         "check:e2e-coverage:report": "tsx e2e/scripts/check-coverage.ts --save",
         "generate:mcp-types": "node --max-old-space-size=4096 node_modules/tsx/dist/cli.mjs e2e/scripts/generate-mcp-types.ts",
-        "generate:dts": "tsx workflow/generate-dts.ts",
+        "generate:dts": "node --max-old-space-size=8192 node_modules/tsx/dist/cli.mjs workflow/generate-dts.ts && npx jest --roots packages/cocos-cli-types --testPathPattern dts-snapshot -u",
+        "generate:dts:ci": "node --max-old-space-size=8192 node_modules/tsx/dist/cli.mjs workflow/generate-dts.ts",
         "install:engine": "cd ./packages/engine && npm i",
         "setup:runtime-engine": "node workflow/setup-runtime-engine.js",
         "compiler": "FORCE_UPDATE=true npm i",
         "compiler:engine": "node --max-old-space-size=8192 workflow/compiler-engine.js --force",
         "build:cc-module": "node workflow/build-cc-module.js",
         "build:static-web": "node workflow/build-scene-bundle.js && node workflow/build-polyfills.js",
-        "build": "npm run build:clear && node workflow/prepare-dts.js && tsc -b && npm run build:static-web && node workflow/generate-schema.js",
-        "compile": "npm run build:clear && node workflow/prepare-dts.js && tsc -b && npm run build:static-web && node workflow/generate-schema.js",
+        "build:platform-views": "node workflow/build-platform-views.js && node workflow/build-platform-assets.js",
+        "build": "npm run build:clear && node workflow/prepare-dts.js && tsc -b && npm run build:static-web && node workflow/generate-schema.js && npm run generate:dts && npm run build:platform-views",
+        "compile": "npm run build:clear && node workflow/prepare-dts.js && tsc -b && npm run build:platform-views && npm run build:static-web && node workflow/generate-schema.js",
         "build:clear": "node workflow/build-clear.js",
         "build:watch": "tsc -b --watch",
         "postinstall": "node workflow/postinstall.js",
@@ -43,7 +45,7 @@
         "pack:script": "node workflow/pack-scripts.js",
         "release": "npx --yes gulp release --gulpfile workflow/release.js",
         "start:mcp-debug": "node ./dist/cli.js start-mcp-server --project=./tests/fixtures/projects/asset-operation",
-        "start:preview": "node ./dist/cli.js preview --project=./tests/fixtures/projects/asset-operation",
+        "start:preview": "node ./dist/cli.js preview --scene-editor",
         "start:mcp-inspector": "npx @modelcontextprotocol/inspector",
         "cli": "node ./dist/cli.js",
         "rebuild": "node workflow/electron-rebuild.js"
@@ -115,9 +117,9 @@
     "dependencies": {
         "@babel/core": "7.28.5",
         "@babel/preset-env": "7.28.5",
-        "@cocos/asset-db": "^3.0.0-alpha.7",
+        "@cocos/asset-db": "3.0.0-alpha.10",
         "@cocos/build-polyfills": "2.0.0",
-        "@cocos/ccbuild": "2.3.18",
+        "@cocos/ccbuild": "2.3.19",
         "@cocos/creator-programming-rollup-plugin-mod-lo": "1.4.6",
         "@cocos/data-uri": "^1.0.6",
         "@cocos/fbx-gltf-conv": "^1.0.0-alpha.49.editor.1",

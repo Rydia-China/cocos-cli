@@ -17,8 +17,8 @@ import {
     SchemaNodeUpdateResult,
 } from './node-schema';
 import { description, param, result, title, tool } from '../decorator/decorator.js';
-import { COMMON_STATUS, CommonResultType } from '../base/schema-base';
-import { ICreateByNodeTypeParams, Scene } from '../../core/scene';
+import { COMMON_STATUS, CommonResultType, getCommonErrorStatus } from '../base/schema-base';
+import { ICreateByNodeTypeParams, INodeInfo, Scene } from '../../core/scene';
 
 export class NodeApi {
 
@@ -35,12 +35,12 @@ export class NodeApi {
             data: undefined,
         };
         try {
-            const resultNode = await Scene.createNodeByType(options as ICreateByNodeTypeParams);
+            const resultNode = await Scene.Node.createByType(options as ICreateByNodeTypeParams);
             if (resultNode) {
                 ret.data = resultNode;
             }
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('Failed to create node:', e); // 创建节点失败:
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -62,12 +62,12 @@ export class NodeApi {
             data: undefined,
         };
         try {
-            const resultNode = await Scene.createNodeByAsset(options);
+            const resultNode = await Scene.Node.createByAsset(options);
             if (resultNode) {
                 ret.data = resultNode;
             }
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('Failed to create node:', e); // 创建节点失败:
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -90,13 +90,13 @@ export class NodeApi {
         };
 
         try {
-            const result = await Scene.deleteNode(options);
+            const result = await Scene.Node.delete(options);
             if (!result) throw new Error(`node not found at path: ${options.path}`);
             ret.data = {
                 path: result.path,
             };
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('Failed to delete node:', e); // 删除节点失败:
             ret.reason = e instanceof Error ? e.message : String(e);
             delete ret.data;
@@ -114,7 +114,7 @@ export class NodeApi {
     @result(SchemaNodeUpdateResult)
     async updateNode(@param(SchemaNodeUpdate) options: TUpdateNodeOptions): Promise<CommonResultType<TNodeUpdateResult>> {
         try {
-            const data = await Scene.updateNode(options);
+            const data = await Scene.Node.update(options);
             return {
                 data: data,
                 code: COMMON_STATUS.SUCCESS,
@@ -122,7 +122,7 @@ export class NodeApi {
         } catch (e) {
             console.error('Failed to update node:', e); // 更新节点失败:
             return {
-                code: COMMON_STATUS.FAIL,
+                code: getCommonErrorStatus(e),
                 reason: e instanceof Error ? e.message : String(e),
             };
         }
@@ -133,7 +133,7 @@ export class NodeApi {
     */
     @tool('scene-query-node')
     @title('Query Node') // 查询节点
-    @description('Query a node in the currently opened scene. You need to pass in the path of the node, such as: Canvas/Node1') // 在当前打开的场景中查询节点，需要传入节点的路径，比如：Canvas/Node1
+    @description('Query a node (NOT a component) in the currently opened scene. The path must be a node path like "Canvas/Node1" — do NOT append a component type (e.g. do NOT use "Canvas/Node1/cc.Label"). To query a component, use scene-query-component instead.') // 在当前打开的场景中查询节点（不是组件），需要传入节点路径，比如：Canvas/Node1。不要追加组件类型名称（例如不要用 Canvas/Node1/cc.Label），如需查询组件请使用 scene-query-component
     @result(SchemaNodeQueryResult)
     async queryNode(@param(SchemaNodeQuery) options: TQueryNodeOptions): Promise<CommonResultType<TNodeDetail>> {
         const ret: CommonResultType<TNodeDetail> = {
@@ -142,11 +142,11 @@ export class NodeApi {
         };
 
         try {
-            const result = await Scene.queryNode(options);
+            const result = await Scene.Node.query(options) as INodeInfo | null;
             if (!result) throw new Error(`node not found at path: ${options.path}`);
             ret.data = result;
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('Failed to query node:', e); // 查询节点失败:
             ret.reason = e instanceof Error ? e.message : String(e);
         }

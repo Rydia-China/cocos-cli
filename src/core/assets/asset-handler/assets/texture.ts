@@ -1,12 +1,12 @@
-import { VirtualAsset, Asset, queryAsset } from '@cocos/asset-db';
+import { VirtualAsset, Asset } from '@cocos/asset-db';
 
 import { ImageAsset } from 'cc';
 
 import { AssetHandler } from '../../@types/protected';
 import { Texture2DAssetUserData } from '../../@types/userDatas';
 import { getDependUUIDList } from '../utils';
-import { defaultIconConfig, makeDefaultTexture2DAssetUserData } from './image/utils';
-import { applyTextureBaseAssetUserData } from './texture-base';
+import { makeDefaultTexture2DAssetUserData } from './image/utils';
+import { applyTextureBaseAssetUserData, createTextureBaseUserDataConfig } from './texture-base';
 import { url2uuid } from '../../utils';
 
 export const TextureHandler: AssetHandler = {
@@ -15,22 +15,25 @@ export const TextureHandler: AssetHandler = {
 
     // 引擎内对应的类型
     assetType: 'cc.Texture2D',
-    iconInfo: {
-        default: defaultIconConfig,
-        generateThumbnail(asset: Asset) {
-            const imageUuid = getImageUuid(asset);
-            if (!imageUuid) {
-                return defaultIconConfig;
-            }
-            const imageAsset = queryAsset(imageUuid) as Asset;
-            if (imageAsset.invalid) {
-                return defaultIconConfig;
-            }
-            const extname = imageAsset.meta.files.find((extName) => extName !== '.json') || '.png';
-            return {
-                type: 'image',
-                value: imageAsset.library + extname,
-            };
+
+    propertySchemaConfig: {
+        ...createTextureBaseUserDataConfig(),
+        imageUuidOrDatabaseUri: {
+            label: 'i18n:ENGINE.assets.image.label',
+            default: '',
+            render: {
+                ui: 'ui-asset',
+                attributes: {
+                    assetType: 'cc.ImageAsset',
+                },
+            },
+        },
+        isUuid: {
+            label: 'i18n:importer.property_schema.texture.use_uuid',
+            default: true,
+            render: {
+                ui: 'ui-checkbox',
+            },
         },
     },
 

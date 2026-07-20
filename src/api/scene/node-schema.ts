@@ -1,21 +1,18 @@
 import { z } from 'zod';
 
 import { NodeType } from '../../core/scene';
-import { INode } from '../../core/scene';
-import { SchemaQuat, SchemaVec3 } from '../base/schema-value-types';
+import { INodeInfo } from '../../core/scene';
+import { SchemaVec3 } from '../base/schema-value-types';
 import { SchemaNodeIdentifier, SchemaComponentIdentifier } from '../base/schema-identifier';
 import { SchemaPrefabInfo } from './prefab-info-schema';
-import { SchemaUrl } from '../base/schema-identifier';
+import { SchemaAssetDbUrl } from '../base/schema-asset-db-url';
 import { SchemaComponent } from './component-schema';
 
 // 节点属性的 schema，
 export const SchemaNodeProperty = z.object({
     position: SchemaVec3.describe('Node position'), // 节点位置
     // worldPosition: Vec3Schema.describe('节点位置'),
-    rotation: SchemaQuat.describe('Node rotation, quaternion'), // 节点旋转, 四元数
-    // worldRotation: QuatSchema.describe('节点旋转, 四元数'),
-    eulerAngles: SchemaVec3.describe('Node rotation, Euler angles'), // 节点旋转，欧拉角
-    // angle: z.number().describe('本地坐标系下的旋转，用欧拉角表示，但是限定在 z 轴上'),
+    rotation: SchemaVec3.describe('Node rotation, Euler angles'), // 节点旋转，欧拉角
     scale: SchemaVec3.describe('Node scale'), // 节点缩放
     // worldScale: Vec3Schema.describe('节点缩放'),
     // worldMatrix: Mat4Schema.describe('节点的世界变换矩阵'),
@@ -34,28 +31,28 @@ export const SchemaComponentOrDetail = z.union([
     SchemaComponentIdentifier
 ]).describe('components on the node'); // 节点上的组件信息
 
-export const SchemaNode: z.ZodType<INode> = SchemaNodeIdentifier.extend({
+export const SchemaNode: z.ZodType<INodeInfo> = SchemaNodeIdentifier.extend({
     properties: SchemaNodeProperty.describe('Node properties'), // 节点属性
     prefab: z.union([SchemaPrefabInfo, z.null()]).describe('Prefab information'), // 预制体信息
-    children: z.array(z.lazy(() => SchemaNode)).optional().describe('List of child nodes'), // 子节点列表
-    components: z.array(SchemaComponentOrDetail).optional().describe('List of components on the node'), // 节点上的组件列表
+    children: z.array(SchemaNodeIdentifier).optional().describe('List of child nodes as identifiers'), // 子节点列表（标识符）
+    components: z.array(SchemaComponentIdentifier).optional().describe('List of components on the node'), // 节点上的组件列表
 });
 
 // 查询节点的参数
 export const SchemaNodeSearch = SchemaNodeIdentifier.extend({
     deeps: z.number().default(10).describe('Query depth'), // 查询的深度
-    queryChildren: z.boolean().default(false).describe('Whether to query child node information'), // 是否查询子节点信息
+    includeChildren: z.boolean().default(false).describe('Whether to include child nodes as INodeIdentifier[]'), // 是否包含子节点信息
 }).describe('Query options for nodes, the result is the intersection of the passed information'); // 查询节点的选项参数，查询结果是传入的信息的交集
 
 // 查询节点的参数
 export const SchemaNodeQuery = z.object({
-    path: z.string().describe('Node path, root path is "/"'), // 节点路径
-    queryChildren: z.boolean().default(false).describe('Whether to query child node information'), // 是否查询子节点信息
-    queryComponent: z.boolean().default(false).describe('Whether to query component`s detailed information, the child component only returns concise information.'), // 是否查询组件信息,子节点只返回简易的信息
+    path: z.string().describe('Node path only — format: "ParentNode/ChildNode", e.g. "Canvas/Node1". Root is "/". Do NOT include a component type suffix (e.g. do NOT use "Canvas/Node1/cc.Label"). To query a component use scene-query-component with a component path.'), // 节点路径
+    includeChildren: z.boolean().default(false).describe('Whether to include child nodes; true returns INodeIdentifier[], false returns undefined'), // 是否包含子节点
+    includeComponents: z.boolean().default(false).describe('Whether to include components; true returns IComponentIdentifier[], false returns undefined'), // 是否包含组件
 }).describe('To configure options for node query, the Scene must be open first. The result is the intersection of the passed information'); // 查询节点的选项参数，查询结果是传入的信息的交集
 
 // 查询节点的结果
-export const SchemaNodeQueryResult: z.ZodType<INode> = SchemaNode;
+export const SchemaNodeQueryResult: z.ZodType<INodeInfo> = SchemaNode;
 
 //节点更新的参数
 export const SchemaNodeUpdate = z.object({
@@ -90,7 +87,7 @@ const SchemaNodeCreateBase = z.object({
 }).describe('To configure options for node creation, the Scene must be open first.'); // 创建节点的选项参数, 需先打开场景;
 
 export const SchemaNodeCreateByAsset = SchemaNodeCreateBase.extend({
-    dbURL: SchemaUrl.describe('Prefab asset path, if created from a prefab, please pass this parameter, format is custom db path e.g. db://assets/abc.prefab'), // 预制体资源路径，如果是从某个预制体创建，请传入这个参数，格式为自定义的db 路径比如 db://assets/abc.prefab
+    dbURL: SchemaAssetDbUrl.describe('Prefab asset path, if created from a prefab, please pass this parameter, format is custom db path e.g. db://assets/abc.prefab'), // 预制体资源路径，如果是从某个预制体创建，请传入这个参数，格式为自定义的db 路径比如 db://assets/abc.prefab
 });
 
 export const SchemaNodeCreateByType = SchemaNodeCreateBase.extend({

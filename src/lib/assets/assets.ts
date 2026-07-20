@@ -1,16 +1,25 @@
-import type { AssetOperationOption, CreateAssetByTypeOptions, IAssetInfo, IAssetMeta, ISupportCreateType, QueryAssetsOption } from '../../core/assets/@types/public';
-import type { CreateAssetOptions, IAssetConfig, IAssetDBInfo, ICreateMenuInfo, IUerDataConfigItem, QueryAssetType } from '../../core/assets/@types/protected';
+import type { AnimationMaskChange, AnimationMaskDump, AssetOperationOption, AssetPropertySchemaMap, CreateAssetByTypeOptions, DeleteAssetOptions, IAssetFileSystemProvider, IAssetInfo, IAssetMeta, ISupportCreateType, MaterialDump, MaterialEffectInfo, MaterialTechniqueDump, QueryAssetsOption, SerializedAssetPatch, SerializedAssetQueryResult } from '../../core/assets/@types/public';
+import type { CreateAssetOptions, IAssetConfig, IAssetDBInfo, ICreateMenuInfo, IUerDataConfigItem, QueryAssetType, ThumbnailInfo, ThumbnailSize } from '../../core/assets/@types/protected';
 import type { FilterPluginOptions, IPluginScriptInfo } from '../../core/scripting/interface';
 import { assetDBManager, assetManager } from '../../core/assets';
+import type { AnimGraphVariantDump } from '../../core/assets/animation-graph-variant';
 
 export type * from '../../core/assets/@types/public';
 export type { CreateAssetOptions, IAssetConfig, IAssetDBInfo, ICreateMenuInfo, IUerDataConfigItem, QueryAssetType } from '../../core/assets/@types/protected';
 export type { FilterPluginOptions, IPluginScriptInfo } from '../../core/scripting/interface';
+export type { AnimGraphVariantDump } from '../../core/assets/animation-graph-variant';
 
 export async function init(): Promise<void> {
     // 初始化资源数据库
     const { initAssetDB } = await import('../../core/assets');
     await initAssetDB();
+}
+
+/**
+ * Register asset filesystem provider before initializing the asset database.
+ */
+export function setFileSystemProvider(provider: IAssetFileSystemProvider): void {
+    assetDBManager.setFileSystemProvider(provider);
 }
 
 /**
@@ -73,8 +82,8 @@ export function onProgress(listener: (current: number, total: number, url: strin
 /**
  * Delete Asset // 删除资源
  */
-export async function deleteAsset(dbPath: string): Promise<IAssetInfo | null> {
-    return await assetManager.removeAsset(dbPath);
+export async function deleteAsset(dbPath: string, options?: DeleteAssetOptions): Promise<IAssetInfo | null> {
+    return await assetManager.removeAsset(dbPath, options);
 }
 
 /**
@@ -171,6 +180,104 @@ export async function saveAsset(
     return await assetManager.saveAsset(pathOrUrlOrUUID, data);
 }
 
+export const animationGraphVariant = {
+    query(uuid: string): Promise<AnimGraphVariantDump> {
+        return assetManager.queryAnimationGraphVariant(uuid);
+    },
+
+    change(uuid: string, dump: AnimGraphVariantDump): Promise<AnimGraphVariantDump> {
+        return assetManager.changeAnimationGraphVariant(uuid, dump);
+    },
+
+    save(uuid: string): Promise<void> {
+        return assetManager.saveAnimationGraphVariant(uuid);
+    },
+};
+
+export const animationMask = {
+    async query(uuid: string): Promise<AnimationMaskDump> {
+        const { queryAnimationMask } = await import('../../core/assets/animation-mask');
+        return queryAnimationMask(uuid);
+    },
+
+    async importSkeleton(uuid: string, skeletonSourceUuid: string): Promise<AnimationMaskDump> {
+        const { importAnimationMaskSkeleton } = await import('../../core/assets/animation-mask');
+        return importAnimationMaskSkeleton(uuid, skeletonSourceUuid);
+    },
+
+    async clearNodes(uuid: string): Promise<AnimationMaskDump> {
+        const { clearAnimationMaskNodes } = await import('../../core/assets/animation-mask');
+        return clearAnimationMaskNodes(uuid);
+    },
+
+    async changeDump(uuid: string, changes: AnimationMaskChange[]): Promise<AnimationMaskDump> {
+        const { changeAnimationMaskDump } = await import('../../core/assets/animation-mask');
+        return changeAnimationMaskDump(uuid, changes);
+    },
+
+    async save(uuid: string): Promise<void> {
+        const { saveAnimationMask } = await import('../../core/assets/animation-mask');
+        return saveAnimationMask(uuid);
+    },
+};
+
+/**
+ * Query serialized asset dump data.
+ */
+export async function querySerializedData(uuidOrUrlOrPath: string): Promise<SerializedAssetQueryResult> {
+    return await assetManager.querySerializedData(uuidOrUrlOrPath);
+}
+
+/**
+ * Save serialized asset dump data.
+ */
+export async function saveSerializedData(
+    uuidOrUrlOrPath: string,
+    patch: SerializedAssetPatch
+): Promise<SerializedAssetQueryResult> {
+    return await assetManager.saveSerializedData(uuidOrUrlOrPath, patch);
+}
+
+export const serializedData = {
+    query: querySerializedData,
+    save: saveSerializedData,
+};
+
+/**
+ * Query all available material effects.
+ */
+export async function queryMaterialAllEffects(): Promise<Record<string, MaterialEffectInfo>> {
+    return await assetManager.queryMaterialAllEffects();
+}
+
+/**
+ * Query one material effect dump by UUID or effect name.
+ */
+export async function queryMaterialEffect(effectNameOrUuid: string): Promise<MaterialTechniqueDump[]> {
+    return await assetManager.queryMaterialEffect(effectNameOrUuid);
+}
+
+/**
+ * Query material dump data.
+ */
+export async function queryMaterial(uuidOrUrlOrPath: string): Promise<MaterialDump> {
+    return await assetManager.queryMaterial(uuidOrUrlOrPath);
+}
+
+/**
+ * Save material dump data.
+ */
+export async function saveMaterial(uuidOrUrlOrPath: string, dump: MaterialDump): Promise<void> {
+    return await assetManager.saveMaterial(uuidOrUrlOrPath, dump);
+}
+
+export const material = {
+    query: queryMaterial,
+    queryEffect: queryMaterialEffect,
+    queryAllEffects: queryMaterialAllEffects,
+    save: saveMaterial,
+};
+
 /**
  * Query Asset UUID // 查询资源 UUID
  */
@@ -226,10 +333,10 @@ export async function querySortedPlugins(
  */
 export async function renameAsset(
     source: string,
-    target: string,
+    newName: string,
     options: AssetOperationOption = {}
 ): Promise<any> {
-    return await assetManager.renameAsset(source, target, options);
+    return await assetManager.renameAsset(source, newName, options);
 }
 
 /**
@@ -273,10 +380,20 @@ export async function queryAssetUserDataConfig(
  */
 export async function updateAssetUserData(
     urlOrUuidOrPath: string,
+    userData: Record<string, any>
+): Promise<any> {
+    return await assetManager.updateUserData(urlOrUuidOrPath, userData);
+}
+
+/**
+ * Update Asset User Data By Path // 按路径更新资源用户数据
+ */
+export async function updateAssetUserDataByPath(
+    urlOrUuidOrPath: string,
     path: string,
     value: any
 ): Promise<any> {
-    return await assetManager.updateUserData(urlOrUuidOrPath, path, value);
+    return await assetManager.updateUserDataByPath(urlOrUuidOrPath, path, value);
 }
 
 /**
@@ -284,6 +401,29 @@ export async function updateAssetUserData(
  */
 export async function queryAssetConfigMap(): Promise<Record<string, IAssetConfig>> {
     return await assetManager.queryAssetConfigMap();
+}
+
+/**
+ * Query Asset Property Schema // 查询资源导入属性 schema
+ */
+export async function queryPropertySchema(importer: string): Promise<AssetPropertySchemaMap> {
+    return await assetManager.queryPropertySchema(importer);
+}
+
+/**
+ * Query Thumbnail Handlers // 查询支持缩略图生成的资源处理器列表
+ */
+export function queryThumbnailHandlers(): string[] {
+    return assetManager.queryThumbnailHandlers();
+}
+
+/**
+ * Generate Thumbnail // 生成资源缩略图
+ */
+export async function generateThumbnail(
+    urlOrUUIDOrPath: string, size?: ThumbnailSize
+): Promise<ThumbnailInfo | null> {
+    return assetManager.generateThumbnail(urlOrUUIDOrPath, size);
 }
 
 /**

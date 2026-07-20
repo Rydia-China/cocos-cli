@@ -29,7 +29,13 @@ async function buildSceneBundle() {
             }),
             {
                 name: 'smart-node-builtins',
-                resolveId(id) {
+                resolveId(id, importer) {
+                    // editor-extends root: resolve to globalThis.EditorExtends (pre-loaded bundle)
+                    // Only match root import, not subpaths like utils/serialize
+                    if (importer && (id.match(/engine[/\\]editor-extends[/\\]?$/) || id.match(/engine[/\\]editor-extends[/\\]index(\.js|\.ts)?$/))) {
+                        return '\0global-editor-extends';
+                    }
+
                     const stubs = [
                         'fs', 'node:fs', 'fs-extra', 'graceful-fs', 'lodash', 'package.json', '@cocos/asset-db',
                         'constants', 'stream', 'assert', 'crypto', 'child_process', 'vm', 'buffer',
@@ -63,6 +69,34 @@ async function buildSceneBundle() {
                     return null;
                 },
                 load(id) {
+                    if (id === '\0global-editor-extends') {
+                        return `
+                            // Patch EventEmitter.prototype.off for scene-bundle's events module
+                            // (previously patched by inlined editor-extends, now in separate bundle)
+                            import EventEmitter from 'events';
+                            if (!EventEmitter.prototype.off) {
+                                EventEmitter.prototype.off = EventEmitter.prototype.removeListener;
+                            }
+                            var _ee = globalThis.EditorExtends || {};
+                            export var emit = function() { return _ee.emit.apply(_ee, arguments); };
+                            export var on = function() { return _ee.on.apply(_ee, arguments); };
+                            export var off = function() { return (_ee.off || _ee.removeListener).apply(_ee, arguments); };
+                            export var removeListener = function() { return _ee.removeListener.apply(_ee, arguments); };
+                            export var Component = _ee.Component;
+                            export var Node = _ee.Node;
+                            export var Script = _ee.Script;
+                            export var UuidUtils = _ee.UuidUtils;
+                            export var MissingReporter = _ee.MissingReporter;
+                            export var serialize = _ee.serialize;
+                            export var serializeCompiled = _ee.serializeCompiled;
+                            export var deserializeFull = _ee.deserializeFull;
+                            export var GeometryUtils = _ee.GeometryUtils;
+                            export var PrefabUtils = _ee.PrefabUtils;
+                            export var walkProperties = function() {};
+                            export function init() { return _ee.init ? _ee.init() : Promise.resolve(); }
+                            export default _ee;
+                        `;
+                    }
                     if (id.startsWith('\0smart-')) {
                         const originalId = id.substring('\0smart-'.length);
                         // graceful-fs patches the fs object it receives — give it a plain
@@ -119,6 +153,32 @@ async function buildSceneBundle() {
                                 export var write = _gfs.write;
                                 export var readJSON = _gfs.readJSON;
                                 export var readJson = _gfs.readJson;
+                            `;
+                        }
+                        if (originalId === 'cc/mods-mgr') {
+                            return `
+                                function _createDeferredModule(id) {
+                                    return new Proxy({}, {
+                                        get: function(target, prop) {
+                                            if (typeof System !== 'undefined' && System.get) {
+                                                var real = System.get(id);
+                                                if (real) return real[prop];
+                                            }
+                                            return undefined;
+                                        },
+                                        has: function(target, prop) {
+                                            if (typeof System !== 'undefined' && System.get) {
+                                                var real = System.get(id);
+                                                if (real) return prop in real;
+                                            }
+                                            return false;
+                                        }
+                                    });
+                                }
+                                export function syncImport(id) {
+                                    return _createDeferredModule(id);
+                                }
+                                export default { syncImport: syncImport };
                             `;
                         }
                         if (originalId === 'proper-lockfile') {
@@ -232,9 +292,9 @@ async function buildSceneBundle() {
                             export const mkdirSync = realMod.mkdirSync || function() {};
                             export const rmdir = realMod.rmdir || function(p, o, cb) { var fn = typeof o === 'function' ? o : cb; fn && fn(null); };
                             export const rmdirSync = realMod.rmdirSync || function() {};
-                            export const realpath = realMod.realpath || function(p, o, cb) { 
-                                var fn = typeof o === 'function' ? o : cb; 
-                                if (typeof fn === 'function') fn(null, p); 
+                            export const realpath = realMod.realpath || function(p, o, cb) {
+                                var fn = typeof o === 'function' ? o : cb;
+                                if (typeof fn === 'function') fn(null, p);
                             };
                             export const realpathSync = realMod.realpathSync || function(p) { return p; };
                             export const utimes = realMod.utimes || function(p, a, m, cb) { cb && cb(null); };
@@ -326,6 +386,32 @@ async function buildSceneBundle() {
                     return { code: fixed, map: null };
                 }
             },
+            {
+                // reload 时清除 System-A 中的 pack chunk 缓存。
+                // 双实例下 _invalidateAllPackMods 只删 System-B 的 pack:/// URL，
+                // System-A 中通过 DOM import map 加载的 HTTP chunk 不会被删除，
+                // 导致 re-import 返回缓存，类不重新注册。
+                name: 'clear-pack-chunks-before-reimport',
+                renderChunk(code) {
+                    return { code: code.replace(
+                        "await System.import('cce:/internal/x/prerequisite-imports')",
+                        "/* 清除 System-A 中的 pack chunk 缓存 */ " +
+                        "(function() { try { for (var e of System.entries()) { if (e[0].indexOf('/chunks/') !== -1) System.delete(e[0]); } } catch(_e) {} })(); " +
+                        "await System.import('cce:/internal/x/prerequisite-imports')"
+                    ), map: null };
+                }
+            },
+            {
+                // Bare global references to EditorExtends (not imported) need live access
+                // to globalThis.EditorExtends (the pre-loaded bundle's live-binding wrapper).
+                name: 'alias-editor-extends-global',
+                renderChunk(code) {
+                    return {
+                        code: 'var EditorExtends = globalThis.EditorExtends;\n' + code,
+                        map: null
+                    };
+                }
+            },
             nodeResolve({
                 preferBuiltins: true,
                 browser: true,
@@ -374,7 +460,123 @@ async function buildSceneBundle() {
     console.log('[Build] Successfully bundled to', bundleOutputFile);
 }
 
-buildSceneBundle().catch(err => {
-    console.error('Failed to bundle scene services:', err);
+async function buildEditorExtends() {
+    const workspaceDir = path.join(__dirname, '..');
+    const editorExtendsDir = path.join(workspaceDir, 'dist', 'core', 'engine', 'editor-extends').replace(/\\/g, '/');
+    const eventsPolyfill = path.join(workspaceDir, 'node_modules', 'events', 'events.js');
+
+    console.log('[Build] Bundling editor-extends for preview...');
+
+    const bundle = await rollup({
+        input: 'editor-extends-entry',
+        inlineDynamicImports: true,
+        plugins: [
+            json(),
+            virtual({
+                'editor-extends-entry': `
+                    import * as _ee from '${editorExtendsDir}/index.js';
+                    // Patch UuidUtils aliases (engine uses uuid/compressUuid/decompressUuid/isUuid)
+                    if (_ee.UuidUtils) {
+                        var U = _ee.UuidUtils;
+                        U.uuid = U.uuid || U.generate;
+                        U.compressUuid = U.compressUuid || U.compressUUID;
+                        U.decompressUuid = U.decompressUuid || U.decompressUUID;
+                        U.isUuid = U.isUuid || U.isUUID;
+                    }
+                    // Live-binding wrapper: getter 始终从模块命名空间读取最新值，
+                    // 使 init() 后赋值的 serialize/GeometryUtils 等能通过 globalThis.EditorExtends 访问
+                    var editorExtends = {};
+                    var keys = Object.keys(_ee);
+                    for (var i = 0; i < keys.length; i++) {
+                        (function(key) {
+                            Object.defineProperty(editorExtends, key, {
+                                get: function() { return _ee[key]; },
+                                set: function(v) {
+                                    Object.defineProperty(editorExtends, key, {
+                                        value: v, writable: true, configurable: true
+                                    });
+                                },
+                                enumerable: true,
+                                configurable: true,
+                            });
+                        })(keys[i]);
+                    }
+                    globalThis.EditorExtends = editorExtends;
+                    // Override init: inlined serialize/geometry/prefab depends on stubbed cc.
+                    // Just set allow flags here; serialize is loaded by engine-bootstrap after engine.
+                    Object.defineProperty(editorExtends, 'init', {
+                        value: async function() {
+                            _ee.Component.allow = true;
+                            _ee.Node.allow = true;
+                            _ee.Script.allow = true;
+                        },
+                        writable: true,
+                        configurable: true,
+                    });
+                `
+            }),
+            {
+                name: 'editor-extends-deps',
+                resolveId(id) {
+                    if (id === 'events') return eventsPolyfill;
+                    if (id === 'semver') return '\0ee-stub-semver';
+                    if (id === 'cc' || id.startsWith('cc/')) return '\0ee-stub-cc';
+                    var stubs = ['fs', 'fs-extra', 'lodash', '@cocos/asset-db', 'child_process', 'path'];
+                    if (stubs.includes(id)) return '\0ee-stub-empty';
+                    if (id === 'crypto') return '\0ee-stub-crypto';
+                    if (id === 'node-uuid') return '\0ee-stub-uuid';
+                    if (id.endsWith('/package.json')) return '\0ee-stub-json';
+                    return null;
+                },
+                load(id) {
+                    if (id === '\0ee-stub-semver') return 'export function rsort(arr) { return arr.sort().reverse(); }';
+                    if (id === '\0ee-stub-cc') return 'export default {};';
+                    if (id === '\0ee-stub-empty') return 'export default {};';
+                    if (id === '\0ee-stub-json') return 'export default {};';
+                    if (id === '\0ee-stub-crypto') return `
+                        export function createHash() {
+                            var data = '';
+                            return {
+                                update: function(d) { data += d; return this; },
+                                digest: function() { return data.substring(0, 32); }
+                            };
+                        }
+                        export default { createHash: createHash };
+                    `;
+                    if (id === '\0ee-stub-uuid') return `
+                        function v4() {
+                            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                                var r = Math.random() * 16 | 0;
+                                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+                            });
+                        }
+                        export default { v4: v4 };
+                        export { v4 };
+                    `;
+                    return null;
+                }
+            },
+            nodeResolve({ preferBuiltins: false, browser: true }),
+            commonjs(),
+        ],
+    });
+
+    const outputFile = path.join(workspaceDir, 'static', 'web', 'editor-extends.bundle.js');
+    await bundle.write({
+        file: outputFile,
+        format: 'es',
+        sourcemap: false,
+        banner: '(async function() {',
+        footer: '})();',
+    });
+
+    console.log('[Build] Successfully bundled editor-extends to', outputFile);
+}
+
+Promise.all([
+    buildSceneBundle(),
+    buildEditorExtends(),
+]).catch(err => {
+    console.error('Failed to bundle:', err);
     process.exit(1);
 });

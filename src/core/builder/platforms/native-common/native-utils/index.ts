@@ -1,9 +1,8 @@
 'use strict';
 
 import { execFileSync } from 'child_process';
-import { existsSync } from 'fs';
-import { remove } from 'fs-extra';
-import { join } from 'path';
+import { pathExists, remove } from 'fs-extra';
+import { dirname, join } from 'path';
 import { GlobalPaths } from '../../../../../global';
 import { IBuildTaskOption } from '../../../@types';
 /**
@@ -19,40 +18,51 @@ export async function clearDest(projectPath: string) {
 }
 
 export async function getCmakePath(): Promise<string> {
-    const internalCmakeRoot = join(GlobalPaths.staticDir, 'tools/cmake');
-    const cmakePath = process.platform === 'win32'
-        ? join(internalCmakeRoot, 'bin/cmake.exe')
-        : join(internalCmakeRoot, 'bin/cmake');
-    if (existsSync(cmakePath)) {
-        return cmakePath;
+    const executable = process.platform === 'win32' ? 'cmake.exe' : 'cmake';
+    const defaultCmakePath = join(GlobalPaths.staticDir, 'tools/cmake', 'bin', executable);
+    if (await pathExists(defaultCmakePath)) {
+        return defaultCmakePath;
+    }
+
+    const candidates = [process.cwd(), __dirname];
+    for (const start of candidates) {
+        let current = start;
+        while (true) {
+            const fallback = join(current, 'static', 'tools', 'cmake', 'bin', executable);
+            if (await pathExists(fallback)) {
+                console.warn(`Fallback cmake path from ${defaultCmakePath} to ${fallback}`);
+                return fallback;
+            }
+
+            const parent = dirname(current);
+            if (parent === current) {
+                break;
+            }
+            current = parent;
+        }
     }
 
     const downloader = join(GlobalPaths.workspace, 'workflow/download-tools.js');
-    if (existsSync(downloader)) {
+    if (await pathExists(downloader)) {
         console.log('[native] bundled cmake missing, downloading cmake tool...');
         execFileSync(process.execPath, [downloader, '--only=cmake'], {
             cwd: GlobalPaths.workspace,
             stdio: 'inherit',
         });
-        if (existsSync(cmakePath)) {
-            return cmakePath;
+        if (await pathExists(defaultCmakePath)) {
+            return defaultCmakePath;
         }
     }
 
-    const systemCmake = process.platform === 'win32' ? 'cmake.exe' : 'cmake';
     try {
-        execFileSync(systemCmake, ['--version'], { stdio: 'ignore' });
-        console.warn(`[native] bundled cmake missing, using system cmake: ${systemCmake}`);
-        return systemCmake;
+        execFileSync(executable, ['--version'], { stdio: 'ignore' });
+        console.warn(`[native] bundled cmake missing, using system cmake: ${executable}`);
+        return executable;
     } catch {
-        // Fall through to the expected bundled path so downstream error logs show the missing tool.
+        // Return the expected bundled path so downstream errors identify the missing tool.
     }
 
-    if (process.platform === 'win32') {
-        return join(internalCmakeRoot, 'bin/cmake.exe');
-    } else {
-        return join(internalCmakeRoot, 'bin/cmake');
-    }
+    return defaultCmakePath;
 }
 
 // 支持中文的平台如果有修改，需要同步到 configs

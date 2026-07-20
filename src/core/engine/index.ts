@@ -1,10 +1,30 @@
 import fse from 'fs-extra';
+import { existsSync, readdirSync, statSync } from 'fs';
 import { EngineInfo } from './@types/public';
-import { IEngineConfig, IEngineProjectConfig, IInitEngineInfo } from './@types/config';
-import { IModuleConfig } from './@types/modules';
+import type { IEngineConfig, IEngineProjectConfig, IInitEngineInfo, IJointTextureLayoutPreviewResult } from './@types/config';
+import { IModuleConfig, ModuleRenderConfig } from './@types/modules';
 import { join } from 'path';
+import { cloneDeep, merge } from 'lodash';
 import { configurationRegistry, IBaseConfiguration } from '../configuration';
 import { assetManager } from '../assets';
+import { getEngineDynamicConfigContribution, getEngineRenderConfig, getLocalizedEngineRenderConfig } from './dynamic-metadata';
+import { createEngineMetadataNodes } from './metadata';
+import i18n from '../base/i18n';
+import {
+    CUSTOM_PIPELINE_MODULE,
+    CUSTOM_PIPELINE_NAME_KEY,
+    DEFAULT_CUSTOM_PIPELINE_NAME,
+    deriveGraphicsConfigFromCustomPipeline,
+    deriveGraphicsConfigFromModules,
+    ensureCustomPipelineMacroConfig,
+    hasOwnConfigKey,
+    mergeGraphicsConfigWithModules,
+    normalizeIncludeModulesWithGraphics,
+} from './graphics-config';
+import {
+    queryJointTextureLayoutPreview as createJointTextureLayoutPreview,
+    resolveCustomJointTextureLayouts,
+} from './joint-texture-layout';
 
 /**
  * 整合 engine 的一些编译、配置读取等功能
@@ -15,6 +35,11 @@ export interface IEngine {
     getConfig(): IEngineConfig;
     init(enginePath: string): Promise<this>;
     initEngine(info: IInitEngineInfo): Promise<this>;
+    queryRenderConfig(): ModuleRenderConfig;
+    queryLocalizedRenderConfig(): ModuleRenderConfig;
+    queryJointTextureLayoutPreview(): Promise<IJointTextureLayoutPreviewResult>;
+    queryLayerBuiltin(): Promise<{ name: string; value: number }[]>;
+    querySortingLayerBuiltin(): Promise<ReadonlyArray<{ id: number; name: string; value: number }>>;
 }
 
 const layerMask: number[] = [];
@@ -40,6 +65,7 @@ const Backends2D = {
 // 所以界面上的 勾选动作 和 状态判断 都要忽略这个列表的数据，从 3.8.6 开始我将这个 ignoreKeys 改成 ignoreModules 从 视图层移到主进程
 // 直接在数据源上过滤掉，减少 视图层的判断
 const ignoreModules = ['custom-pipeline-post-process'];
+
 class EngineManager implements IEngine {
     private _init: boolean = false;
     private _info: EngineInfo = {
@@ -56,45 +82,89 @@ class EngineManager implements IEngine {
             builtin: '',
         }
     };
-    private _config: IEngineConfig = this.defaultConfig;
+    private _defaultConfig: IEngineConfig = this.createFallbackDefaultConfig();
+    private _config: IEngineConfig = cloneDeep(this._defaultConfig);
     private _configInstance!: IBaseConfiguration;
 
     private get defaultConfig(): IEngineConfig {
+        return cloneDeep(this._defaultConfig);
+    }
+
+    /**
+     * 加载引擎包的 i18n 文件（.js CommonJS 模块）
+     * 将 packages/engine/editor/i18n/{lang}/*.js 注册到 ENGINE.* 命名空间
+     * 递归处理子目录（如 modules/physics.js → ENGINE.physics.*）
+     */
+    private _loadEngineI18n(enginePath: string) {
+        const i18nDir = join(enginePath, 'editor', 'i18n');
+        if (!existsSync(i18nDir)) {
+            return;
+        }
+
+        const loadDir = (dir: string, lang: string, prefix: string) => {
+            readdirSync(dir).forEach((entry) => {
+                const fullPath = join(dir, entry);
+                if (entry.endsWith('.js')) {
+                    try {
+                        const resolved = require.resolve(fullPath);
+                        const data = require(resolved);
+                        i18n.registerLanguagePatch(lang, prefix, data);
+                    } catch (error) {
+                        console.warn(`[i18n] Failed to load engine i18n: ${fullPath}`, error);
+                    }
+                } else if (statSync(fullPath).isDirectory()) {
+                    loadDir(fullPath, lang, prefix);
+                }
+            });
+        };
+
+        for (const lang of ['zh', 'en']) {
+            const langDir = join(i18nDir, lang);
+            if (!existsSync(langDir)) {
+                continue;
+            }
+            loadDir(langDir, lang, 'ENGINE');
+        }
+    }
+
+    private createFallbackDefaultConfig(): IEngineConfig {
+        const includeModules = [
+            '2d',
+            '3d',
+            'debug-renderer',
+            'affine-transform',
+            'animation',
+            'audio',
+            'base',
+            'custom-pipeline',
+            'dragon-bones',
+            'gfx-webgl',
+            'graphics',
+            'intersection-2d',
+            'light-probe',
+            'marionette',
+            'mask',
+            'particle',
+            'particle-2d',
+            'physics-2d-box2d',
+            'physics-ammo',
+            'primitive',
+            'profiler',
+            'rich-text',
+            'skeletal-animation',
+            'spine-3.8',
+            'terrain',
+            'tiled-map',
+            'tween',
+            'ui',
+            'ui-skew',
+            'video',
+            'websocket',
+            'webview'
+        ];
+
         return {
-            includeModules: [
-                '2d',
-                '3d',
-                'debug-renderer',
-                'affine-transform',
-                'animation',
-                'audio',
-                'base',
-                'custom-pipeline',
-                'dragon-bones',
-                'gfx-webgl',
-                'graphics',
-                'intersection-2d',
-                'light-probe',
-                'marionette',
-                'mask',
-                'particle',
-                'particle-2d',
-                'physics-2d-box2d',
-                'physics-ammo',
-                'primitive',
-                'profiler',
-                'rich-text',
-                'skeletal-animation',
-                'spine-3.8',
-                'terrain',
-                'tiled-map',
-                'tween',
-                'ui',
-                'ui-skew',
-                'video',
-                'websocket',
-                'webview'
-            ],
+            includeModules,
             flags: {
                 LOAD_BULLET_MANUALLY: false,
                 LOAD_SPINE_MANUALLY: false
@@ -132,8 +202,10 @@ class EngineManager implements IEngine {
                 ENABLE_MULTI_TOUCH: true,
                 MAX_LABEL_CANVAS_POOL_SIZE: 20,
                 ENABLE_WEBGL_HIGHP_STRUCT_VALUES: false,
-                BATCHER2D_MEM_INCREMENT: 144
+                BATCHER2D_MEM_INCREMENT: 144,
+                [CUSTOM_PIPELINE_NAME_KEY]: DEFAULT_CUSTOM_PIPELINE_NAME,
             },
+            graphics: deriveGraphicsConfigFromModules(includeModules),
             customJointTextureLayouts: [],
             splashScreen: {
                 displayRatio: 1,
@@ -163,7 +235,37 @@ class EngineManager implements IEngine {
             },
             downloadMaxConcurrency: 15,
             renderPipeline: 'fd8ec536-a354-4a17-9c74-4f3883c378c8',
+            customPipeline: false,
         };
+    }
+
+    private resolveDefaultConfig(engineRoot: string): IEngineConfig {
+        const fallbackConfig = this.createFallbackDefaultConfig();
+        const contribution = getEngineDynamicConfigContribution({
+            engineRoot,
+            fallbackConfig: {
+                includeModules: fallbackConfig.includeModules,
+                flags: fallbackConfig.flags,
+                macroConfig: fallbackConfig.macroConfig,
+            },
+        });
+        const includeModules = contribution.defaults.includeModules;
+
+        return {
+            ...fallbackConfig,
+            includeModules,
+            flags: contribution.defaults.flags,
+            macroConfig: ensureCustomPipelineMacroConfig(contribution.defaults.macroConfig),
+            graphics: deriveGraphicsConfigFromModules(includeModules),
+        };
+    }
+
+    private getSelectedModuleProjectConfig(projectConfig: IEngineProjectConfig) {
+        if (!projectConfig.configs || Object.keys(projectConfig.configs).length === 0) {
+            return undefined;
+        }
+        const globalConfigKey = projectConfig.globalConfigKey || Object.keys(projectConfig.configs)[0];
+        return projectConfig.configs[globalConfigKey];
     }
 
     /**
@@ -218,23 +320,56 @@ class EngineManager implements IEngine {
         this._info.native.builtin = this._info.native.path = join(enginePath, 'native');
         this._info.version = await import(join(enginePath, 'package.json')).then((pkg) => pkg.version);
         this._info.tmpDir = join(enginePath, '.temp');
-        const configInstance = await configurationRegistry.register('engine', this.defaultConfig);
+        this._loadEngineI18n(enginePath);
+        this._defaultConfig = this.resolveDefaultConfig(this._info.typescript.path);
+        const configInstance = await configurationRegistry.register('engine', {
+            defaults: this.defaultConfig,
+            nodes: () => createEngineMetadataNodes({
+                defaultConfig: this.defaultConfig,
+                engineRoot: this._info.typescript.path,
+            }),
+        });
         this._configInstance = configInstance;
-        this._init = true;
-        await this.updateConfig();
-        return this;
-    }
+        const syncConfig = () => {
+            const projectConfig = configInstance.getAll() || {};
+            const mergedConfig = merge(
+                cloneDeep(configInstance.getDefaultConfig() || {}),
+                projectConfig,
+            ) as IEngineConfig & IEngineProjectConfig;
+            const moduleConfig = this.getSelectedModuleProjectConfig(mergedConfig);
 
-    async updateConfig() {
-        const projectConfig = await this._configInstance.get<IEngineProjectConfig>();
-        this._config = projectConfig;
-        if (!projectConfig.configs || Object.keys(projectConfig.configs).length === 0) {
-            return this;
-        }
-        const globalConfigKey = projectConfig.globalConfigKey || Object.keys(projectConfig.configs)[0];
-        this._config.includeModules = projectConfig.configs[globalConfigKey].includeModules;
-        this._config.flags = projectConfig.configs[globalConfigKey].flags;
-        this._config.noDeprecatedFeatures = projectConfig.configs[globalConfigKey].noDeprecatedFeatures;
+            if (moduleConfig) {
+                if (!Object.prototype.hasOwnProperty.call(projectConfig, 'includeModules')) {
+                    mergedConfig.includeModules = moduleConfig.includeModules;
+                }
+                if (!Object.prototype.hasOwnProperty.call(projectConfig, 'flags')) {
+                    mergedConfig.flags = moduleConfig.flags;
+                }
+                if (!Object.prototype.hasOwnProperty.call(projectConfig, 'noDeprecatedFeatures')) {
+                    mergedConfig.noDeprecatedFeatures = moduleConfig.noDeprecatedFeatures;
+                }
+            }
+            mergedConfig.macroConfig = ensureCustomPipelineMacroConfig(mergedConfig.macroConfig);
+
+            if (hasOwnConfigKey(projectConfig, 'graphics')) {
+                mergedConfig.graphics = mergeGraphicsConfigWithModules(mergedConfig.includeModules, projectConfig.graphics);
+                mergedConfig.includeModules = normalizeIncludeModulesWithGraphics(mergedConfig.includeModules, mergedConfig.graphics);
+            } else if (hasOwnConfigKey(projectConfig, 'customPipeline')) {
+                mergedConfig.graphics = deriveGraphicsConfigFromCustomPipeline(mergedConfig.customPipeline, mergedConfig.includeModules);
+                mergedConfig.includeModules = normalizeIncludeModulesWithGraphics(mergedConfig.includeModules, mergedConfig.graphics);
+            } else {
+                mergedConfig.graphics = deriveGraphicsConfigFromModules(mergedConfig.includeModules);
+            }
+
+            const graphics = mergedConfig.graphics ?? deriveGraphicsConfigFromModules(mergedConfig.includeModules);
+            mergedConfig.graphics = graphics;
+            mergedConfig.customPipeline = graphics.pipeline === CUSTOM_PIPELINE_MODULE;
+            this._config = mergedConfig;
+        };
+        syncConfig();
+        configInstance.on('configuration:save', syncConfig);
+        this._init = true;
+        return this;
     }
 
     async importEditorExtensions() {
@@ -248,7 +383,7 @@ class EngineManager implements IEngine {
 
     async initEditorExtensions() {
         // @ts-ignore
-        globalThis.EditorExtends.init();
+        await globalThis.EditorExtends.init();
     }
 
     /**
@@ -284,9 +419,10 @@ class EngineManager implements IEngine {
         await this.initEditorExtensions();
 
         const modules = this.getConfig().includeModules || [];
-        const { physicsConfig, macroConfig, customLayers, sortingLayers, highQuality } = this.getConfig();
+        const { physicsConfig, macroConfig, customLayers, sortingLayers, highQuality, renderPipeline, customJointTextureLayouts } = this.getConfig();
         const bundles = assetManager.queryAssets({ isBundle: true }).map((item: any) => item.meta?.userData?.bundleName ?? item.name);
         const builtinAssets = info.serverURL && await this.queryInternalAssetList(this.getInfo().typescript.path);
+        const resolvedCustomJointTextureLayouts = await resolveCustomJointTextureLayouts(customJointTextureLayouts);
         const defaultConfig = {
             debugMode: cc.debug.DebugMode.WARN,
             overrideSettings: {
@@ -311,7 +447,11 @@ class EngineManager implements IEngine {
                 },
                 rendering: {
                     renderMode: 3,
+                    renderPipeline,
                     highQualityMode: highQuality,
+                },
+                animation: {
+                    customJointTextureLayouts: resolvedCustomJointTextureLayouts,
                 },
                 physics: {
                     ...physicsConfig,
@@ -359,9 +499,10 @@ class EngineManager implements IEngine {
     }
 
     async getGameConfig(serverURL: string, importBase: string, nativeBase: string, isPreview?: boolean) {
-        const { physicsConfig, macroConfig, customLayers, sortingLayers, highQuality } = this.getConfig();
+        const { physicsConfig, macroConfig, customLayers, sortingLayers, highQuality, renderPipeline, customPipeline, customJointTextureLayouts } = this.getConfig();
         const bundles = assetManager.queryAssets({ isBundle: true }).map((item: any) => item.meta?.userData?.bundleName ?? item.name);
         const builtinAssets = serverURL && await this.queryInternalAssetList(this.getInfo().typescript.path);
+        const resolvedCustomJointTextureLayouts = await resolveCustomJointTextureLayouts(customJointTextureLayouts);
         return {
             debugMode: cc.debug.DebugMode.WARN,
             overrideSettings: {
@@ -383,10 +524,17 @@ class EngineManager implements IEngine {
                 screen: {
                     frameRate: 30,
                     exactFitScreen: true,
+                    designResolution: this.getConfig().designResolution,
                 },
                 rendering: {
                     renderMode: 2,
+                    renderPipeline,
+                    customPipeline,
                     highQualityMode: highQuality,
+                    ...(customPipeline ? { effectSettingsPath: `${serverURL}/scripting/engine/effect-settings` } : {}),
+                },
+                animation: {
+                    customJointTextureLayouts: resolvedCustomJointTextureLayouts,
                 },
                 physics: {
                     ...physicsConfig,
@@ -426,6 +574,43 @@ class EngineManager implements IEngine {
      */
     queryModuleConfig() {
         return this.moduleConfigCache;
+    }
+
+    queryRenderConfig(): ModuleRenderConfig {
+        if (!this._init) {
+            throw new Error('Engine not init');
+        }
+        return getEngineRenderConfig(this._info.typescript.path);
+    }
+
+    queryLocalizedRenderConfig(): ModuleRenderConfig {
+        if (!this._init) {
+            throw new Error('Engine not init');
+        }
+        return getLocalizedEngineRenderConfig(this._info.typescript.path);
+    }
+
+    async queryJointTextureLayoutPreview(): Promise<IJointTextureLayoutPreviewResult> {
+        const { customJointTextureLayouts } = this.getConfig();
+        return createJointTextureLayoutPreview(customJointTextureLayouts);
+    }
+
+    async queryLayerBuiltin() {
+        const { Layers } = await import('cc');
+
+        const LAYER_NONE = 0;
+        const LAYER_ALL = 0xffffffff;
+        const entries = Object.entries(Layers.Enum) as [string, number][];
+
+        return entries
+            .filter(([, value]) => value !== LAYER_NONE && value !== LAYER_ALL)
+            .map(([name, value]) => ({ name, value }));
+    }
+
+    async querySortingLayerBuiltin() {
+        const { SortingLayers } = await import('cc');
+
+        return SortingLayers.getBuiltinLayers();
     }
 }
 

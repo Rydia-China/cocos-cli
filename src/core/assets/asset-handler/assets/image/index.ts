@@ -7,7 +7,6 @@ import { ImageAssetUserData } from '../../../@types/userDatas';
 
 import { join } from 'path';
 import {
-    defaultIconConfig,
     handleImageUserData,
     importWithType,
     isCapableToFixAlphaTransparencyArtifacts,
@@ -26,16 +25,6 @@ export const ImageHandler: AssetHandler = {
     // 引擎内对应的类型
     assetType: 'cc.ImageAsset',
     open: openImageAsset,
-    iconInfo: {
-        default: defaultIconConfig,
-        generateThumbnail(asset: Asset) {
-            const extname = asset.meta.files.find((extName) => extName !== '.json') || '.png';
-            return {
-                type: 'image',
-                value: asset.library + extname,
-            };
-        },
-    },
     importer: {
         // 版本号如果变更，则会强制重新导入
         version: '1.0.27',
@@ -166,28 +155,29 @@ export const ImageHandler: AssetHandler = {
         default: {
             type: {
                 label: 'i18n:ENGINE.assets.image.type',
+                description: 'i18n:ENGINE.assets.image.typeTip',
                 default: 'sprite-frame',
                 render: {
                     ui: 'ui-select',
                     items: [
                         {
-                            label: 'raw',
+                            label: 'i18n:importer.property_schema.image.type_raw',
                             value: 'raw',
                         },
                         {
-                            label: 'texture',
+                            label: 'i18n:importer.property_schema.image.type_texture',
                             value: 'texture',
                         },
                         {
-                            label: 'normal map',
+                            label: 'i18n:importer.property_schema.image.type_normal_map',
                             value: 'normal map',
                         },
                         {
-                            label: 'sprite-frame',
+                            label: 'i18n:importer.property_schema.image.type_sprite_frame',
                             value: 'sprite-frame',
                         },
                         {
-                            label: 'texture cube',
+                            label: 'i18n:importer.property_schema.image.type_texture_cube',
                             value: 'texture cube',
                         },
                     ],
@@ -195,6 +185,7 @@ export const ImageHandler: AssetHandler = {
             },
             flipVertical: {
                 label: 'i18n:ENGINE.assets.image.flipVertical',
+                description: 'i18n:ENGINE.assets.image.flipVerticalTip',
                 render: {
                     ui: 'ui-checkbox',
                 },

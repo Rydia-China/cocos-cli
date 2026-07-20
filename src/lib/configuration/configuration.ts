@@ -1,5 +1,5 @@
 import type { IConfiguration, ConfigurationScope } from '../../core/configuration/script/interface';
-import { ICocosConfigurationNode } from '../../core/configuration/script/metadata';
+import type { ICocosConfigurationNode } from '../../core/configuration/script/metadata';
 
 export { IConfiguration, ConfigurationScope } from '../../core/configuration/script/interface';
 export { IBaseConfiguration } from '../../core/configuration/script/config';
@@ -45,12 +45,29 @@ export async function save(force?: boolean): Promise<void> {
     return await configurationManager.save(force);
 }
 
+export async function getConfigPath(): Promise<string> {
+    const { configurationManager } = await import('../../core/configuration/index');
+    return await configurationManager.getConfigPath();
+}
+
+/**
+ * 注册 configurationManager 保存事件的监听器
+ * 每次 cocos.config.json 被写入磁盘时触发
+ * @returns 取消监听的函数
+ */
+export function onDidSave(callback: () => void): () => void {
+    // 同步引入：调用时 configurationManager 必定已初始化
+    const { configurationManager } = require('../../core/configuration/index');
+    const handler = () => callback();
+    configurationManager.on('configuration:save', handler);
+    return () => configurationManager.off('configuration:save', handler);
+}
+
 // ==================== Metadata ====================
 
 export { ICocosConfigurationNode, ICocosConfigurationPropertySchema } from '../../core/configuration/script/metadata';
 
 export async function getMetadata(): Promise<ICocosConfigurationNode[]> {
-    const { getCocosConfigNodes } = await import('../../core/configuration/script/metadata');
-    return getCocosConfigNodes();
+    const { configurationRegistry } = await import('../../core/configuration');
+    return configurationRegistry.getMetadata();
 }
-

@@ -190,6 +190,27 @@ describe('ConfigurationManager', () => {
         });
     });
 
+    describe('getConfigPath', () => {
+        beforeEach(async () => {
+            mockFse.pathExists.mockResolvedValue(false);
+            mockFse.ensureDir.mockResolvedValue(undefined);
+            mockFse.writeJSON.mockResolvedValue(undefined);
+            await manager.initialize(projectPath);
+        });
+
+        it('should return the config file path after initialization', async () => {
+            await expect(manager.getConfigPath()).resolves.toBe(configPath);
+        });
+
+        it('should throw when called before initialization', async () => {
+            const uninitializedManager = new ConfigurationManager();
+
+            await expect(uninitializedManager.getConfigPath()).rejects.toThrow(
+                'Failed to get configuration file path'
+            );
+        });
+    });
+
     describe('remove', () => {
         beforeEach(async () => {
             mockFse.pathExists.mockResolvedValue(false);
@@ -299,7 +320,7 @@ describe('ConfigurationManager', () => {
             expect(manager['projectConfig']).toEqual({
                 version: '1.0.0',
                 migratedKey: 'migratedValue',
-                $schema: './temp/cli/cocos.config.schema.json'
+                $schema: './temp/cocos.config.schema.json'
             });
             expect(manager['version']).toBe('1.0.0');
             // Same version - should not migrate (migrate method checks version)
@@ -329,7 +350,7 @@ describe('ConfigurationManager', () => {
             expect(mockFse.ensureDir).toHaveBeenCalledWith(path.dirname(configPath));
             expect(mockFse.writeJSON).toHaveBeenCalledWith(
                 configPath,
-                { version: '1.0.0', test: 'value', $schema: './temp/cli/cocos.config.schema.json' },
+                { version: '1.0.0', test: 'value', $schema: './temp/cocos.config.schema.json' },
                 { spaces: 4 }
             );
 
@@ -340,6 +361,39 @@ describe('ConfigurationManager', () => {
             // Static properties
             expect(ConfigurationManager.VERSION).toBe('1.0.0');
             expect(ConfigurationManager.name).toBe('cocos.config.json');
+        });
+
+        it('should serialize concurrent saves for the same config file', async () => {
+            manager['projectConfig'] = { version: '1.0.0', test: 'value' };
+            mockFse.writeJSON.mockClear();
+
+            let activeWrites = 0;
+            let maxConcurrentWrites = 0;
+            let releaseWrite: (() => void) | undefined;
+            const writeGate = new Promise<void>((resolve) => {
+                releaseWrite = resolve;
+            });
+
+            mockFse.writeJSON.mockImplementation(async () => {
+                activeWrites++;
+                maxConcurrentWrites = Math.max(maxConcurrentWrites, activeWrites);
+                await writeGate;
+                activeWrites--;
+            });
+
+            const firstSave = manager['save']();
+            const secondSave = manager['save']();
+
+            await new Promise((resolve) => setImmediate(resolve));
+
+            expect(mockFse.writeJSON).toHaveBeenCalledTimes(1);
+
+            releaseWrite?.();
+
+            await Promise.all([firstSave, secondSave]);
+
+            expect(mockFse.writeJSON).toHaveBeenCalledTimes(2);
+            expect(maxConcurrentWrites).toBe(1);
         });
     });
 

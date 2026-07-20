@@ -1,23 +1,22 @@
 import { z } from 'zod';
-import type { IComponent } from '../../core/scene';
+import type { IComponentInfo } from '../../core/scene';
 import { SchemaComponentIdentifier } from '../base/schema-identifier';
 import { SchemaCompPrefabInfo } from './prefab-info-schema';
 
 // Create component information // 创建组件信息
 export const SchemaAddComponentInfo = z.object({
     nodePath: z.string().describe('Node path'), // 节点路径
-    //component: z.enum(Object.keys(globalComponentType) as [string, ...string[]]).describe('组件类型'),
     component: z.string().describe('Component name, supports component name, component resource URL and UUID'), // 组件名称，支持组件名称、组件资源的 URL 与 UUID
 }).describe('Information for adding a component'); // 添加组件的信息
 
 // Remove component // 移除组件
 export const SchemaRemoveComponent = z.object({
-    path: z.string().describe('Path of the component, including node path'), // 组件的路径，包含节点路径
+    componentPath: z.string().describe('Component path = node path + "/" + component type name, e.g. "Canvas/Node1/cc.Label" or "Canvas/Node1/cc.Sprite". Must end with the component type (e.g. cc.Label, cc.Sprite). Do NOT pass a bare node path like "Canvas/Node1".'), // 组件路径 = 节点路径 + "/" + 组件类型名称
 }).describe('Information required to remove a component'); // 移除组件需要的信息
 
 // Query component // 查询组件
 export const SchemaQueryComponent = z.object({
-    path: z.string().describe('Path of the component, including node path'), // 组件的路径，包含节点路径
+    componentPath: z.string().describe('Component path = node path + "/" + component type name, e.g. "Canvas/Node1/cc.Label" or "Canvas/Node1/cc.Sprite". Must end with the component type (e.g. cc.Label, cc.Sprite). Do NOT pass a bare node path like "Canvas/Node1".'), // 组件路径 = 节点路径 + "/" + 组件类型名称
 }).describe('Information required to query a component'); // 查询组件需要的信息
 
 // Vec2
@@ -110,7 +109,7 @@ export const SchemaSetPropertyOptions = z.object({
     )
 }).describe('Information required to set component properties'); // 设置组件属性所需要的信息
 
-export const SchemaComponent: z.ZodType<IComponent> = SchemaComponentIdentifier.extend({
+export const SchemaComponent: z.ZodType<IComponentInfo> = SchemaComponentIdentifier.extend({
     properties: z.record(
         z.string().describe('Property name'), // 属性名称
         SchemaProperty,

@@ -3,21 +3,212 @@
  */
 
 import { refresh, reimport, queryUrl, Asset } from '@cocos/asset-db';
-import { copy, move, remove, rename, existsSync } from 'fs-extra';
-import { isAbsolute, dirname, basename, join, relative, extname } from 'path';
+import { copy as fsCopy, move, remove, existsSync } from 'fs-extra';
+import { isAbsolute, dirname, join, relative, extname } from 'path';
 import { IMoveOptions } from '../@types/private';
 import { IAsset, CreateAssetOptions, IExportOptions, IExportData, CreateAssetByTypeOptions, ICreateMenuInfo } from '../@types/protected';
-import { AssetOperationOption, AssetUserDataMap, IAssetInfo, IAssetMeta, ISupportCreateType } from '../@types/public';
+import { AssetOperationOption, AssetUserDataMap, DeleteAssetOptions, IAssetInfo, IAssetMeta, ISupportCreateType } from '../@types/public';
 import assetConfig from '../asset-config';
-import { url2path, ensureOutputData, url2uuid, removeFile } from '../utils';
+import { url2path, ensureOutputData, url2uuid, pathToDbUrlIfAssetDBPath, dirnameForDbUrlOrPath } from '../utils';
 import assetDBManager from './asset-db';
 import assetHandlerManager from './asset-handler';
+import { copyPath, moveAssetSource, removeAssetSource, renamePath } from './filesystem';
 import i18n from '../../base/i18n';
 import assetQuery from './query';
 import utils from '../../base/utils';
 import EventEmitter from 'events';
 import { mergeMeta } from '../asset-handler/utils';
 import * as lodash from 'lodash';
+
+function isScriptAsset(asset: IAsset) {
+    const importer = asset.meta?.importer;
+    return importer === 'typescript'
+        || importer === 'javascript'
+        || /\.(?:[cm]?js|[cm]?ts|jsx|tsx)$/i.test(asset.source || '');
+}
+
+function getSceneOrPrefabAssetKind(asset: IAsset): 'scene' | 'prefab' | null {
+    const importer = asset.meta?.importer;
+    const source = asset.source || '';
+    if (importer === 'scene' || /\.scene$/i.test(source)) {
+        return 'scene';
+    }
+    if (importer === 'prefab' || /\.prefab$/i.test(source)) {
+        return 'prefab';
+    }
+    return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getTypeScriptSyntaxError(fileName: string, content: string): string | null {
+    let ts: typeof import('typescript') | null = null;
+    try {
+        ts = require('typescript') as typeof import('typescript');
+    } catch {
+        return null;
+    }
+
+    const result = ts.transpileModule(content, {
+        fileName,
+        reportDiagnostics: true,
+        compilerOptions: {
+            target: ts.ScriptTarget.ESNext,
+            experimentalDecorators: true,
+        },
+    });
+    const diagnostic = result.diagnostics?.find((item) => item.category === ts.DiagnosticCategory.Error);
+    if (!diagnostic) {
+        return null;
+    }
+
+    const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+    if (diagnostic.file && typeof diagnostic.start === 'number') {
+        const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+        return `${message} (${position.line + 1}:${position.character + 1})`;
+    }
+    return message;
+}
+
+function getScriptStructureError(content: string): string | null {
+    const stack: { char: string; line: number; column: number }[] = [];
+    let line = 1;
+    let column = 0;
+    let state: 'normal' | 'singleQuote' | 'doubleQuote' | 'template' | 'lineComment' | 'blockComment' = 'normal';
+    let escaped = false;
+    const opening = new Set(['(', '[', '{']);
+    const closing: Record<string, string> = {
+        ')': '(',
+        ']': '[',
+        '}': '{',
+    };
+
+    for (let index = 0; index < content.length; index++) {
+        const char = content[index];
+        const next = content[index + 1];
+        column++;
+
+        if (state === 'lineComment') {
+            if (char === '\n') {
+                state = 'normal';
+            }
+        } else if (state === 'blockComment') {
+            if (char === '*' && next === '/') {
+                state = 'normal';
+                index++;
+                column++;
+            }
+        } else if (state === 'singleQuote' || state === 'doubleQuote' || state === 'template') {
+            const quote = state === 'singleQuote' ? '\'' : state === 'doubleQuote' ? '"' : '`';
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === quote) {
+                state = 'normal';
+            }
+        } else {
+            if (char === '/' && next === '/') {
+                state = 'lineComment';
+                index++;
+                column++;
+            } else if (char === '/' && next === '*') {
+                state = 'blockComment';
+                index++;
+                column++;
+            } else if (char === '\'') {
+                state = 'singleQuote';
+            } else if (char === '"') {
+                state = 'doubleQuote';
+            } else if (char === '`') {
+                state = 'template';
+            } else if (opening.has(char)) {
+                stack.push({ char, line, column });
+            } else if (closing[char]) {
+                const last = stack.pop();
+                if (!last || last.char !== closing[char]) {
+                    return `unexpected "${char}" at ${line}:${column}`;
+                }
+            }
+        }
+
+        if (char === '\n') {
+            line++;
+            column = 0;
+            if (state === 'lineComment') {
+                state = 'normal';
+            }
+        }
+    }
+
+    if (state === 'singleQuote' || state === 'doubleQuote' || state === 'template') {
+        return `unterminated ${state === 'template' ? 'template string' : 'string literal'}`;
+    }
+    if (state === 'blockComment') {
+        return 'unterminated block comment';
+    }
+    const last = stack.pop();
+    if (last) {
+        return `unclosed "${last.char}" at ${last.line}:${last.column}`;
+    }
+    return null;
+}
+
+function getSceneOrPrefabJsonError(asset: IAsset, content: string | Buffer): string | null {
+    const kind = getSceneOrPrefabAssetKind(asset);
+    if (!kind) {
+        return null;
+    }
+
+    const text = typeof content === 'string'
+        ? content
+        : Buffer.isBuffer(content)
+            ? content.toString('utf8')
+            : null;
+    if (text === null) {
+        return 'content must be JSON text';
+    }
+
+    let data: unknown;
+    try {
+        data = JSON.parse(text);
+    } catch (error) {
+        return `invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    if (!Array.isArray(data)) {
+        return `expected ${kind} JSON array`;
+    }
+    if (data.length < 2) {
+        return `expected ${kind} JSON array with asset and root entries`;
+    }
+
+    const assetEntry = data[0];
+    const rootEntry = data[1];
+    if (!isRecord(assetEntry) || !isRecord(rootEntry)) {
+        return `expected ${kind} asset and root entries to be objects`;
+    }
+
+    if (kind === 'scene') {
+        if (assetEntry.__type__ !== 'cc.SceneAsset') {
+            return 'expected first entry __type__ to be cc.SceneAsset';
+        }
+        if (rootEntry.__type__ !== 'cc.Scene') {
+            return 'expected second entry __type__ to be cc.Scene';
+        }
+        return null;
+    }
+
+    if (assetEntry.__type__ !== 'cc.Prefab') {
+        return 'expected first entry __type__ to be cc.Prefab';
+    }
+    if (rootEntry.__type__ !== 'cc.Node') {
+        return 'expected second entry __type__ to be cc.Node';
+    }
+    return null;
+}
 
 class AssetOperation extends EventEmitter {
 
@@ -51,6 +242,24 @@ class AssetOperation extends EventEmitter {
         return path;
     }
 
+    _checkRenameNewName(asset: IAsset, newName: string) {
+        if (!newName || newName === '.' || newName === '..') {
+            throw new Error('newName must be a single file or directory name');
+        }
+
+        if (
+            newName.startsWith('db://')
+            || isAbsolute(newName)
+            || /[\\/]/.test(newName)
+        ) {
+            throw new Error('newName must be a single file or directory name');
+        }
+
+        if (!asset.isDirectory() && !extname(newName)) {
+            throw new Error('newName must include file extension');
+        }
+    }
+
     async saveAssetMeta(uuid: string, meta: IAssetMeta, asset?: IAsset) {
         // 不能为数组
         if (
@@ -65,15 +274,48 @@ class AssetOperation extends EventEmitter {
         await asset._assetDB.reimport(asset.uuid);
     }
 
-    async updateUserData<T extends keyof AssetUserDataMap = 'unknown'>(uuidOrURLOrPath: string, path: string, value: any): Promise<AssetUserDataMap[T]> {
+    async updateUserData<T extends keyof AssetUserDataMap = 'unknown'>(uuidOrURLOrPath: string, userData: AssetUserDataMap[T]): Promise<AssetUserDataMap[T] | undefined> {
+        if (!isRecord(userData)) {
+            throw new Error('userData must be an object');
+        }
+
         const asset = assetQuery.queryAsset(uuidOrURLOrPath);
         if (!asset) {
             console.error(`can not find asset ${uuidOrURLOrPath}`);
             return;
         }
+
+        if (!isRecord(asset.meta.userData)) {
+            asset.meta.userData = {} as AssetUserDataMap[T];
+        }
+        const currentUserData = asset.meta.userData as Record<string, unknown>;
+        for (const key of Object.keys(currentUserData)) {
+            delete currentUserData[key];
+        }
+        Object.assign(currentUserData, lodash.cloneDeep(userData));
+        asset.meta.userData = currentUserData as AssetUserDataMap[T];
+        await asset.save();
+        await asset._assetDB.reimport(asset.uuid);
+        return asset?.meta.userData as AssetUserDataMap[T];
+    }
+
+    async updateUserDataByPath<T extends keyof AssetUserDataMap = 'unknown'>(uuidOrURLOrPath: string, path: string, value: any): Promise<AssetUserDataMap[T] | undefined> {
+        if (!path) {
+            throw new Error('path must not be empty. Use updateUserData to replace the complete userData object');
+        }
+
+        const asset = assetQuery.queryAsset(uuidOrURLOrPath);
+        if (!asset) {
+            console.error(`can not find asset ${uuidOrURLOrPath}`);
+            return;
+        }
+        if (!isRecord(asset.meta.userData)) {
+            asset.meta.userData = {} as AssetUserDataMap[T];
+        }
         lodash.set(asset?.meta.userData, path, value);
         await asset.save();
-        return asset?.meta.userData;
+        await asset._assetDB.reimport(asset.uuid);
+        return asset?.meta.userData as AssetUserDataMap[T];
     }
 
     async saveAsset(uuidOrURLOrPath: string, content: string | Buffer) {
@@ -92,6 +334,7 @@ class AssetOperation extends EventEmitter {
             throw new Error(`${i18n.t('assets.save_asset.fail.uuid')}`);
         }
 
+        this._validateAssetContentBeforeSave(asset, content);
         const res = await assetHandlerManager.saveAsset(asset, content);
         if (res) {
             await asset._assetDB.reimport(asset.uuid);
@@ -100,6 +343,30 @@ class AssetOperation extends EventEmitter {
             throw asset.importError || new Error(`Save asset ${asset.source} failed`);
         }
         return assetQuery.encodeAsset(asset);
+    }
+
+    private _validateAssetContentBeforeSave(asset: IAsset, content: string | Buffer) {
+        this._validateScriptContentBeforeSave(asset, content);
+        this._validateSceneOrPrefabContentBeforeSave(asset, content);
+    }
+
+    private _validateScriptContentBeforeSave(asset: IAsset, content: string | Buffer) {
+        if (!isScriptAsset(asset) || typeof content !== 'string') {
+            return;
+        }
+        const structureError = getScriptStructureError(content);
+        const syntaxError = getTypeScriptSyntaxError(asset.source, content);
+        const error = syntaxError || structureError;
+        if (error) {
+            throw new Error(`Invalid script content: ${error}`);
+        }
+    }
+
+    private _validateSceneOrPrefabContentBeforeSave(asset: IAsset, content: string | Buffer) {
+        const error = getSceneOrPrefabJsonError(asset, content);
+        if (error) {
+            throw new Error(`Invalid scene/prefab asset content: ${error}`);
+        }
     }
 
     checkValidUrl(urlOrPath: string) {
@@ -155,10 +422,7 @@ class AssetOperation extends EventEmitter {
         if (!createMenus.length) {
             throw new Error(`Can not support create type: ${type}`);
         }
-        let dir = dirOrUrl;
-        if (dirOrUrl.startsWith('db://')) {
-            dir = url2path(dirOrUrl);
-        }
+        const dir = this._resolveCreateAssetDir(dirOrUrl);
         let createInfo: undefined | ICreateMenuInfo = createMenus[0];
         if (createMenus.length > 1 && options?.templateName) {
             createInfo = createMenus.find((menu) => menu.name === options.templateName);
@@ -167,15 +431,25 @@ class AssetOperation extends EventEmitter {
             }
         }
         const extName = extname(createInfo.fullFileName);
-        const target = join(dir, baseName + extName);
+        const fileName = extName && baseName.endsWith(extName) ? baseName : baseName + extName;
+        const target = join(dir, fileName);
 
         return await this.createAsset({
             handler: createInfo.handler,
             target,
             overwrite: options?.overwrite ?? false,
+            rename: options?.rename ?? false,
             template: createInfo.template,
             content: options?.content,
         });
+    }
+
+    private _resolveCreateAssetDir(dirOrUrl: string) {
+        const normalizedDirOrUrl = this._pathToDbUrlIfInsideAssetDB(dirOrUrl);
+        if (normalizedDirOrUrl.startsWith('db://')) {
+            return url2path(normalizedDirOrUrl);
+        }
+        return normalizedDirOrUrl;
     }
 
     /**
@@ -185,12 +459,14 @@ class AssetOperation extends EventEmitter {
      * @param options 
      */
     async importAsset(source: string, target: string, options?: AssetOperationOption): Promise<IAssetInfo[]> {
-        if (target.startsWith('db://')) {
-            target = url2path(target);
+        const targetPath = target.startsWith('db://') ? url2path(target) : target;
+        const assetTarget = this._pathToDbUrlIfInsideAssetDB(target);
+
+        if (!this._isSameFilesystemPath(source, targetPath)) {
+            await copyPath(source, targetPath, options);
         }
-        await copy(source, target, options);
-        await this.refreshAsset(target);
-        const assetInfo = assetQuery.queryAssetInfo(target);
+        await this.refreshAsset(assetTarget);
+        const assetInfo = assetQuery.queryAssetInfo(assetTarget);
         if (!assetInfo) {
             return [];
         }
@@ -257,11 +533,11 @@ class AssetOperation extends EventEmitter {
     async outputExportData(handler: string, src: IExportData, dest: IExportData) {
         const res = await assetHandlerManager.outputExportData(handler, src, dest);
         if (!res) {
-            await copy(src.import.path, dest.import.path);
+            await fsCopy(src.import.path, dest.import.path);
             if (src.native && dest.native) {
                 const nativeSrc: string[] = Object.values(src.native);
                 const nativeDest: string[] = Object.values(dest.native);
-                await Promise.all(nativeSrc.map((path, i) => copy(path, nativeDest[i])));
+                await Promise.all(nativeSrc.map((path, i) => fsCopy(path, nativeDest[i])));
             }
         }
     }
@@ -277,18 +553,43 @@ class AssetOperation extends EventEmitter {
     }
 
     private async _refreshAsset(pathOrUrlOrUUID: string, autoRefreshDir = true): Promise<number> {
-        const result = await refresh(pathOrUrlOrUUID);
+        const refreshTarget = this._pathToDbUrlIfInsideAssetDB(pathOrUrlOrUUID);
+        const refreshDir = this._dirnameForRefresh(refreshTarget);
+        const result = await refresh(refreshTarget);
         if (result === undefined) {
             throw new Error(`can not find asset ${pathOrUrlOrUUID}`);
         }
         if (autoRefreshDir) {
             // HACK 某些情况下导入原始资源后，文件夹的 mtime 会发生变化，导致资源量大的情况下下次获得焦点自动刷新时会有第二次的文件夹大批量刷新
             // 用进入队列的方式才能保障 pause 等机制不会被影响
-            await assetDBManager.addTask(assetDBManager.autoRefreshAssetLazy.bind(assetDBManager), [dirname(pathOrUrlOrUUID)]);
+            await assetDBManager.addTask(assetDBManager.autoRefreshAssetLazy.bind(assetDBManager), [refreshDir]);
         }
         // this.autoRefreshAssetLazy(dirname(pathOrUrlOrUUID));
-        console.debug(`refresh asset ${dirname(pathOrUrlOrUUID)} success`);
+        console.debug(`refresh asset ${refreshDir} success`);
         return result;
+    }
+
+    private _pathToDbUrlIfInsideAssetDB(pathOrUrlOrUUID: string) {
+        return pathToDbUrlIfAssetDBPath(pathOrUrlOrUUID, assetDBManager.assetDBInfo);
+    }
+
+    private _isSameFilesystemPath(source: string, target: string) {
+        if (!isAbsolute(source) || !isAbsolute(target)) {
+            return source === target;
+        }
+
+        let normalizedSource = utils.Path.normalize(source);
+        let normalizedTarget = utils.Path.normalize(target);
+        if (process.platform === 'win32') {
+            normalizedSource = normalizedSource.toLowerCase();
+            normalizedTarget = normalizedTarget.toLowerCase();
+        }
+
+        return normalizedSource === normalizedTarget;
+    }
+
+    private _dirnameForRefresh(pathOrUrlOrUUID: string) {
+        return dirnameForDbUrlOrPath(pathOrUrlOrUUID);
     }
 
     /**
@@ -338,7 +639,7 @@ class AssetOperation extends EventEmitter {
         this._checkReadonly(asset);
         source = asset.source;
         target = this._checkOverwrite(target, option);
-        await moveFile(source, target, option);
+        await moveAssetSource(source, target, option);
 
         const url = queryUrl(target);
         const reg = /db:\/\/[^/]+/.exec(url);
@@ -359,14 +660,14 @@ class AssetOperation extends EventEmitter {
     /**
      * 重命名某个资源
      * @param source 
-     * @param target 
+     * @param newName
      */
-    async renameAsset(source: string, target: string, option?: AssetOperationOption) {
-        return await assetDBManager.addTask(this._renameAsset.bind(this), [source, target, option]);
+    async renameAsset(source: string, newName: string, option?: AssetOperationOption) {
+        return await assetDBManager.addTask(this._renameAsset.bind(this), [source, newName, option]);
     }
 
-    private async _renameAsset(source: string, target: string, option?: AssetOperationOption) {
-        console.debug(`start rename asset from ${source} -> ${target}...`);
+    private async _renameAsset(source: string, newName: string, option?: AssetOperationOption) {
+        console.debug(`start rename asset from ${source} -> ${newName}...`);
         const asset = assetQuery.queryAsset(source);
         if (!asset) {
             throw new Error(`asset in source file ${source} not exists`);
@@ -374,29 +675,25 @@ class AssetOperation extends EventEmitter {
         this._checkReadonly(asset);
         source = asset.source;
         this._checkExists(source);
-        if (target.startsWith('db://')) {
-            target = url2path(target);
-        }
+        this._checkRenameNewName(asset, newName);
+
+        let target = join(dirname(source), newName);
         target = this._checkOverwrite(target, option);
         // 源地址不能被目标地址包含，也不能相等
         if (target.startsWith(join(source, '/'))) {
             throw new Error(`${i18n.t('assets.rename_asset.fail.parent')} \nsource: ${source}\ntarget: ${target}`);
         }
 
-        const uri = {
-            basename: basename(target),
-            dirname: dirname(target),
-        };
-        const temp = join(uri.dirname, '.rename_temp');
+        const temp = join(dirname(target), '.rename_temp');
 
         // 改到临时路径，然后刷新，删除原来的缓存
-        await rename(source + '.meta', temp + '.meta');
-        await rename(source, temp);
+        await renamePath(source + '.meta', temp + '.meta');
+        await renamePath(source, temp);
         await this._refreshAsset(source, false);
 
         // 改为真正的路径，然后刷新，用新名字重新导入
-        await rename(temp + '.meta', target + '.meta');
-        await rename(temp, target);
+        await renamePath(temp + '.meta', target + '.meta');
+        await renamePath(temp, target);
         await this._refreshAsset(target);
         // TODO 返回资源信息
         console.debug(`rename asset from ${source} -> ${target} success`);
@@ -407,7 +704,7 @@ class AssetOperation extends EventEmitter {
      * @param path 
      * @returns 
      */
-    async removeAsset(uuidOrURLOrPath: string): Promise<IAssetInfo | null> {
+    async removeAsset(uuidOrURLOrPath: string, options: DeleteAssetOptions = { useTrash: true }): Promise<IAssetInfo | null> {
         const asset = assetQuery.queryAsset(uuidOrURLOrPath);
         if (!asset) {
             throw new Error(`${i18n.t('assets.delete_asset.fail.unexist')} \nsource: ${uuidOrURLOrPath}`);
@@ -418,13 +715,13 @@ class AssetOperation extends EventEmitter {
             throw new Error(`子资源无法单独删除，请传递父资源的 URL 地址`);
         }
         const path = asset.source;
-        const res = await assetDBManager.addTask(this._removeAsset.bind(this), [path]);
+        const res = await assetDBManager.addTask(this._removeAsset.bind(this), [path, options]);
         return res ? assetQuery.encodeAsset(asset) : null;
     }
 
-    private async _removeAsset(path: string): Promise<boolean> {
+    private async _removeAsset(path: string, options: DeleteAssetOptions = { useTrash: true }): Promise<boolean> {
         let res = false;
-        await removeFile(path);
+        await removeAssetSource(path, { useTrash: options.useTrash !== false });
         await this.refreshAsset(path);
         res = true;
         console.debug(`remove asset ${path} success`);

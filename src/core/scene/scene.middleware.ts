@@ -3,6 +3,25 @@ import { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fse from 'fs-extra';
 
+function isBrowserRequest(req: Request): boolean {
+    if (req.query.isBrowser === 'true') {
+        return true;
+    }
+
+    const userAgent = req.headers['user-agent'];
+    return !!req.headers['sec-ch-ua']
+        || req.headers['accept']?.includes('text/html') === true
+        || (typeof userAgent === 'string' && userAgent.includes('Mozilla/') && !userAgent.includes('node.js/'));
+}
+
+function decodePathParam(value: string): string {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
+}
+
 export default {
     get: [
         {
@@ -63,10 +82,10 @@ export default {
         {
             url: /^\/query-extname\/(.+)$/,
             async handler(req: Request, res: Response) {
-                const uuid = req.params[0];
+                const uuid = decodePathParam(req.params[0]);
                 const { assetManager } = await import('../assets');
                 const assetInfo = assetManager.queryAssetInfo(uuid);
-                if (assetInfo && assetInfo.library['.bin'] && Object.keys(assetInfo.library).length === 1) {
+                if (assetInfo?.library?.['.bin'] && Object.keys(assetInfo.library).length === 1) {
                     res.status(200).send('.cconb');
                 } else {
                     res.status(200).send('');
@@ -76,7 +95,7 @@ export default {
         {
             url: /^\/query-asset-info\/(.+)$/,
             async handler(req: Request, res: Response) {
-                const uuid = req.params[0];
+                const uuid = decodePathParam(req.params[0]);
                 const { assetManager } = await import('../assets');
                 const assetInfo = assetManager.queryAssetInfo(uuid);
                 if (assetInfo) {
@@ -110,7 +129,7 @@ export default {
                 const { uuid, ext, nativeName } = req.params;
                 const { assetManager } = await import('../assets');
                 const assetInfo = assetManager.queryAssetInfo(uuid);
-                const filePath = assetInfo && assetInfo.library[`${nativeName}.${ext}`];
+                const filePath = assetInfo?.library?.[`${nativeName}.${ext}`];
                 if (!filePath) {
                     console.warn(`Asset not found: ${req.url}`);
                     return res.status(404).json({
@@ -121,9 +140,7 @@ export default {
                     });
                 }
 
-                const isBrowser = !!(req.headers['accept']?.includes('text/html') || 
-                                   req.headers['sec-ch-ua'] || 
-                                   req.query.isBrowser === 'true');
+                const isBrowser = isBrowserRequest(req);
 
                 if (isBrowser) {
                     const content = await fse.readFile(filePath);
@@ -150,7 +167,7 @@ export default {
                 const { uuid, ext } = req.params;
                 const { assetManager } = await import('../assets');
                 const assetInfo = assetManager.queryAssetInfo(uuid);
-                const filePath = assetInfo && assetInfo.library[`.${ext}`];
+                const filePath = assetInfo?.library?.[`.${ext}`];
                 if (!filePath) {
                     console.warn(`Asset not found: ${req.url}`);
                     return res.status(404).json({
@@ -160,9 +177,7 @@ export default {
                     });
                 }
 
-                const isBrowser = !!(req.headers['accept']?.includes('text/html') || 
-                                   req.headers['sec-ch-ua'] || 
-                                   req.query.isBrowser === 'true');
+                const isBrowser = isBrowserRequest(req);
 
                 if (isBrowser) {
                     const content = await fse.readFile(filePath);

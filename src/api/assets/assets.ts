@@ -10,13 +10,29 @@ import {
     SchemaTargetPath,
     SchemaAssetOperationOption,
     SchemaSourcePath,
+    SchemaSaveAssetPath,
     SchemaAssetData,
+    SchemaSerializedAssetPatch,
+    SchemaSerializedAssetResult,
+    SchemaMaterialEffectNameOrUuid,
+    SchemaMaterialDump,
+    SchemaMaterialEffectsResult,
+    SchemaMaterialEffectResult,
+    SchemaMaterialResult,
     TUrlOrUUIDOrPath,
+    TSaveAssetPath,
     TDataKeys,
     TQueryAssetsOption,
     TSupportCreateType,
     TAssetOperationOption,
     TAssetData,
+    TSerializedAssetPatch,
+    TSerializedAssetResult,
+    TMaterialEffectNameOrUuid,
+    TMaterialDump,
+    TMaterialEffectsResult,
+    TMaterialEffectResult,
+    TMaterialResult,
     SchemaAssetInfoResult,
     SchemaAssetMetaResult,
     SchemaCreateMapResult,
@@ -37,7 +53,9 @@ import {
     TSaveAssetResult,
     TRefreshDirResult,
     SchemaBaseName,
+    SchemaAssetNewName,
     TBaseName,
+    TAssetNewName,
     SchemaRefreshDirResult,
     SchemaCreateAssetByTypeOptions,
     TCreateAssetByTypeOptions,
@@ -61,24 +79,47 @@ import {
     TAssetMoveOptions,
     TAssetRenameOptions,
     TUserDataHandler,
+    SchemaUpdateAssetUserData,
     SchemaUpdateAssetUserDataPath,
     SchemaUpdateAssetUserDataValue,
     SchemaUpdateAssetUserDataResult,
+    TUpdateAssetUserData,
     TUpdateAssetUserDataPath,
     TUpdateAssetUserDataValue,
     TUpdateAssetUserDataResult,
     SchemaAssetConfigMapResult,
     TAssetConfigMapResult,
+    SchemaAssetPropertySchemaResult,
+    TAssetPropertySchemaResult,
     TUUIDOrPath,
     TUrlOrUUID,
     TUrlOrPath,
+    SchemaAnimationGraphVariantDump,
+    SchemaAnimationGraphVariantResult,
+    SchemaAnimationGraphVariantSaveResult,
+    TAnimationGraphVariantDump,
+    TAnimationGraphVariantResult,
+    TAnimationGraphVariantSaveResult,
+    SchemaAnimationMaskDump,
+    SchemaAnimationMaskChanges,
+    SchemaVoidResult,
+    TAnimationMaskDump,
+    TAnimationMaskChanges,
+    TVoidResult,
 } from './schema';
 import { z } from 'zod';
 import { description, param, result, title, tool } from '../decorator/decorator.js';
-import { COMMON_STATUS, CommonResultType, HttpStatusCode } from '../base/schema-base';
+import { COMMON_STATUS, CommonResultType, getCommonErrorStatus, HttpStatusCode } from '../base/schema-base';
 import { assetDBManager, assetManager } from '../../core/assets';
 import { IAssetInfo } from '../../core/assets/@types/public';
 import { SchemaUrlOrPath, SchemaUrlOrUUID, SchemaUUIDOrPath } from '../base/schema-identifier';
+import {
+    changeAnimationMaskDump as changeAnimationMaskDumpCore,
+    clearAnimationMaskNodes as clearAnimationMaskNodesCore,
+    importAnimationMaskSkeleton as importAnimationMaskSkeletonCore,
+    queryAnimationMask as queryAnimationMaskCore,
+    saveAnimationMask as saveAnimationMaskCore,
+} from '../../core/assets/animation-mask';
 
 export class AssetsApi {
 
@@ -124,7 +165,7 @@ export class AssetsApi {
         try {
             await assetManager.refreshAsset(dir);
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('refresh dir fail:', e);
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -152,11 +193,11 @@ export class AssetsApi {
         try {
             ret.data = await assetManager.queryAssetInfo(urlOrUUIDOrPath, dataKeys as (keyof IAssetInfo)[] | undefined);
             if (!ret.data) {
-                ret.code = COMMON_STATUS.FAIL;
+                ret.code = COMMON_STATUS.NOT_FOUND;
                 ret.reason = `❌Asset can not be found: ${urlOrUUIDOrPath}. Please refresh asset db and try again.`;
             }
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('query asset info fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -180,8 +221,12 @@ export class AssetsApi {
 
         try {
             ret.data = await assetManager.queryAssetMeta(urlOrUUIDOrPath);
+            if (!ret.data) {
+                ret.code = COMMON_STATUS.NOT_FOUND;
+                ret.reason = `Asset not found: ${urlOrUUIDOrPath}`;
+            }
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('query asset meta fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -286,9 +331,9 @@ export class AssetsApi {
         try {
             ret.data = await assetManager.createAssetByType(ccType, dirOrUrl, baseName, options);
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error(e);
-            ret.reason = e instanceof Error ? e.message + e.stack : String(e);
+            ret.reason = e instanceof Error ? e.message : String(e);
         }
 
         return ret;
@@ -296,7 +341,7 @@ export class AssetsApi {
 
     @tool('assets-create-asset')
     @title('Create Asset') // 创建资源
-    @description('Create asset based on actual address and file content') // 根据实际地址和文件内容创建资源
+    @description('Create a Cocos asset from file content or a template. Set options.target to an asset-db URL such as db://assets/scripts/GameManager.ts, or to an absolute file path inside an asset database root. Do not pass a web URL or a plain relative path as target.') // 根据文件内容或模板创建 Cocos 资源。options.target 使用 db://assets/scripts/GameManager.ts 这类 asset-db URL，或位于资源数据库根目录内的绝对路径；不要传 Web URL 或普通相对路径。
     @result(SchemaCreatedAssetResult)
     async createAsset(
         @param(SchemaCreateAssetOptions) options: TCreateAssetOptions
@@ -310,9 +355,9 @@ export class AssetsApi {
         try {
             ret.data = await assetManager.createAsset(options);
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error(e);
-            ret.reason = e instanceof Error ? e.message + e.stack : String(e);
+            ret.reason = e instanceof Error ? e.message : String(e);
         }
         return ret;
     }
@@ -338,7 +383,7 @@ export class AssetsApi {
         try {
             ret.data = await assetManager.importAsset(source, target, options);
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('import asset fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -377,10 +422,10 @@ export class AssetsApi {
      */
     @tool('assets-save-asset')
     @title('Save Asset Data') // 保存资源数据
-    @description('Save the content of asset files. Used to modify the content of text-based assets (such as scripts, configuration files, scenes, etc.) and write to disk. Supports both string and Buffer data formats.') // 保存资源文件的内容。用于修改文本类资源（如脚本、配置文件、场景等）的内容并写入磁盘。支持字符串和 Buffer 两种数据格式。
+    @description('Save complete content to an existing asset file. Required arguments: pathOrUrlOrUUID (existing asset URL, UUID, or file path) and data (complete file content). Do not call this tool with empty arguments. This tool does not create new assets or temporary files; create the asset first with assets-create-asset-by-type or assets-create-asset, then call save. For scripts, pass complete syntactically valid content. For scene and prefab assets, pass complete valid Cocos serialized JSON; prefer scene-* tools and scene-save for scene graph edits.')
     @result(SchemaSaveAssetResult)
     async saveAsset(
-        @param(SchemaUrlOrUUIDOrPath) pathOrUrlOrUUID: TUrlOrUUIDOrPath,
+        @param(SchemaSaveAssetPath) pathOrUrlOrUUID: TSaveAssetPath,
         @param(SchemaAssetData) data: TAssetData
     ): Promise<CommonResultType<TSaveAssetResult>> {
         const code: HttpStatusCode = COMMON_STATUS.SUCCESS;
@@ -392,8 +437,350 @@ export class AssetsApi {
         try {
             ret.data = await assetManager.saveAsset(pathOrUrlOrUUID, data);
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('save asset fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    @tool('assets-animation-mask-query')
+    @title('Query Animation Mask')
+    @description('Query a .animask AnimationMask asset and return a stable DTO containing joint paths, enabled states, and tree structure. This tool does not expose Creator inspector reflection dump.')
+    @result(SchemaAnimationMaskDump)
+    async queryAnimationMask(@param(SchemaUrlOrUUIDOrPath) uuid: TUrlOrUUIDOrPath): Promise<CommonResultType<TAnimationMaskDump | null>> {
+        const ret: CommonResultType<TAnimationMaskDump | null> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: null,
+        };
+
+        try {
+            ret.data = await queryAnimationMaskCore(uuid);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('query animation mask fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    @tool('assets-animation-mask-import-skeleton')
+    @title('Import Animation Mask Skeleton')
+    @description('Import joint paths from a Prefab or glTF-scene asset into an AnimationMask. Existing joint states are preserved and missing paths are appended as enabled. Pass the glTF-scene sub-asset UUID when possible.')
+    @result(SchemaAnimationMaskDump)
+    async importAnimationMaskSkeleton(
+        @param(SchemaUrlOrUUIDOrPath) uuid: TUrlOrUUIDOrPath,
+        @param(SchemaUrlOrUUIDOrPath) skeletonSourceUuid: TUrlOrUUIDOrPath
+    ): Promise<CommonResultType<TAnimationMaskDump | null>> {
+        const ret: CommonResultType<TAnimationMaskDump | null> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: null,
+        };
+
+        try {
+            ret.data = await importAnimationMaskSkeletonCore(uuid, skeletonSourceUuid);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('import animation mask skeleton fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    @tool('assets-animation-mask-clear-nodes')
+    @title('Clear Animation Mask Nodes')
+    @description('Clear all joint paths from an AnimationMask asset and return the updated stable DTO.')
+    @result(SchemaAnimationMaskDump)
+    async clearAnimationMaskNodes(@param(SchemaUrlOrUUIDOrPath) uuid: TUrlOrUUIDOrPath): Promise<CommonResultType<TAnimationMaskDump | null>> {
+        const ret: CommonResultType<TAnimationMaskDump | null> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: null,
+        };
+
+        try {
+            ret.data = await clearAnimationMaskNodesCore(uuid);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('clear animation mask nodes fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    @tool('assets-animation-mask-change-dump')
+    @title('Change Animation Mask Dump')
+    @description('Apply path-based changes to an AnimationMask stable DTO. recursive defaults to false; pass recursive=true to update descendant paths.')
+    @result(SchemaAnimationMaskDump)
+    async changeAnimationMaskDump(
+        @param(SchemaUrlOrUUIDOrPath) uuid: TUrlOrUUIDOrPath,
+        @param(SchemaAnimationMaskChanges) changes: TAnimationMaskChanges
+    ): Promise<CommonResultType<TAnimationMaskDump | null>> {
+        const ret: CommonResultType<TAnimationMaskDump | null> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: null,
+        };
+
+        try {
+            ret.data = await changeAnimationMaskDumpCore(uuid, changes);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('change animation mask dump fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    @tool('assets-animation-mask-save')
+    @title('Save Animation Mask')
+    @description('Normalize and save the current AnimationMask asset content, then reimport the asset.')
+    @result(SchemaVoidResult)
+    async saveAnimationMask(@param(SchemaUrlOrUUIDOrPath) uuid: TUrlOrUUIDOrPath): Promise<CommonResultType<TVoidResult>> {
+        const ret: CommonResultType<TVoidResult> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: null,
+        };
+
+        try {
+            await saveAnimationMaskCore(uuid);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('save animation mask fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Query All Material Effects // 查询所有材质 Effect
+     */
+    @tool('assets-material-query-all-effects')
+    @title('Query Material Effects')
+    @description('Query all available cc.EffectAsset entries for assets.material.queryAllEffects. Returns effect UUID, name, hideInEditor flag, and asset path. Use UUID as the stable key when building material effect selectors.')
+    @result(SchemaMaterialEffectsResult)
+    async queryMaterialAllEffects(): Promise<CommonResultType<TMaterialEffectsResult>> {
+        const ret: CommonResultType<TMaterialEffectsResult> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: {},
+        };
+
+        try {
+            ret.data = await assetManager.queryMaterialAllEffects();
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('query material effects fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Query Material Effect // 查询单个材质 Effect
+     */
+    @tool('assets-material-query-effect')
+    @title('Query Material Effect')
+    @description('Query one material Effect by UUID, asset URL/path, or effect name. Returns Creator-compatible technique/pass/property dump data for generating the material inspector UI.')
+    @result(SchemaMaterialEffectResult)
+    async queryMaterialEffect(
+        @param(SchemaMaterialEffectNameOrUuid) effectNameOrUuid: TMaterialEffectNameOrUuid
+    ): Promise<CommonResultType<TMaterialEffectResult>> {
+        const ret: CommonResultType<TMaterialEffectResult> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: [],
+        };
+
+        try {
+            ret.data = await assetManager.queryMaterialEffect(effectNameOrUuid);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('query material effect fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Query Material // 查询材质
+     */
+    @tool('assets-material-query')
+    @title('Query Material')
+    @description('Query a cc.Material asset and return Creator-compatible material dump data. The dump merges effect defaults with values saved in the .mtl file and can be used as the input for assets-material-save.')
+    @result(SchemaMaterialResult)
+    async queryMaterial(
+        @param(SchemaUrlOrUUIDOrPath) uuidOrUrlOrPath: TUrlOrUUIDOrPath
+    ): Promise<CommonResultType<TMaterialResult | null>> {
+        const ret: CommonResultType<TMaterialResult | null> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: null,
+        };
+
+        try {
+            ret.data = await assetManager.queryMaterial(uuidOrUrlOrPath);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('query material fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Save Material // 保存材质
+     */
+    @tool('assets-material-save')
+    @title('Save Material')
+    @description('Save Creator-compatible material dump data to a cc.Material asset. The implementation writes only modified values, then reimports through AssetDB to keep the database state consistent.')
+    @result(SchemaVoidResult)
+    async saveMaterial(
+        @param(SchemaUrlOrUUIDOrPath) uuidOrUrlOrPath: TUrlOrUUIDOrPath,
+        @param(SchemaMaterialDump) dump: TMaterialDump
+    ): Promise<CommonResultType<TVoidResult>> {
+        const ret: CommonResultType<TVoidResult> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: null,
+        };
+
+        try {
+            await assetManager.saveMaterial(uuidOrUrlOrPath, dump as any);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('save material fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Query Serialized Asset Data // 查询序列化资源属性数据
+     */
+    @tool('assets-query-serialized-data')
+    @title('Query Serialized Asset Data')
+    @description('Query Creator-compatible serialized asset dump data through assets.serializedData.query. Supports only cc.PhysicsMaterial and cc.RenderPipeline in the first batch. The returned dump is the raw IProperty structure consumed by ui-prop type="dump": PhysicsMaterial returns a property map, while RenderPipeline returns one top-level IProperty.')
+    @result(SchemaSerializedAssetResult)
+    async querySerializedData(
+        @param(SchemaUrlOrUUIDOrPath) uuidOrUrlOrPath: TUrlOrUUIDOrPath
+    ): Promise<CommonResultType<TSerializedAssetResult>> {
+        const code: HttpStatusCode = COMMON_STATUS.SUCCESS;
+        const ret: CommonResultType<TSerializedAssetResult> = {
+            code: code,
+            data: null,
+        };
+
+        try {
+            ret.data = await assetManager.querySerializedData(uuidOrUrlOrPath);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('query serialized asset data fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Save Serialized Asset Data // 保存序列化资源属性数据
+     */
+    @tool('assets-save-serialized-data')
+    @title('Save Serialized Asset Data')
+    @description('Save Creator-compatible serialized asset dump data through assets.serializedData.save. Supports only cc.PhysicsMaterial and cc.RenderPipeline in the first batch. Prefer passing an IProperty or full dump patch returned by assets-query-serialized-data; unknown fields are rejected, and hidden or readonly fields can only pass through unchanged.')
+    @result(SchemaSerializedAssetResult)
+    async saveSerializedData(
+        @param(SchemaUrlOrUUIDOrPath) uuidOrUrlOrPath: TUrlOrUUIDOrPath,
+        @param(SchemaSerializedAssetPatch) patch: TSerializedAssetPatch
+    ): Promise<CommonResultType<TSerializedAssetResult>> {
+        const code: HttpStatusCode = COMMON_STATUS.SUCCESS;
+        const ret: CommonResultType<TSerializedAssetResult> = {
+            code: code,
+            data: null,
+        };
+
+        try {
+            ret.data = await assetManager.saveSerializedData(uuidOrUrlOrPath, patch);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('save serialized asset data fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Animation Graph Variant
+     */
+    @tool('assets-animation-graph-variant-query')
+    @title('Query Animation Graph Variant')
+    @description('Load an AnimationGraphVariant asset and return its referenced graph UUID, valid clip override rows, and invalid saved override entries.')
+    @result(SchemaAnimationGraphVariantResult)
+    async queryAnimationGraphVariant(
+        @param(SchemaUrlOrUUID) uuid: TUrlOrUUID
+    ): Promise<CommonResultType<TAnimationGraphVariantResult>> {
+        const ret: CommonResultType<TAnimationGraphVariantResult> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: undefined,
+        };
+
+        try {
+            ret.data = await assetManager.queryAnimationGraphVariant(uuid);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('query animation graph variant fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    @tool('assets-animation-graph-variant-change')
+    @title('Change Animation Graph Variant')
+    @description('Update the pending AnimationGraphVariant edit. Changing graphUuid rebuilds the original clip list from the new graph; otherwise clips updates override mappings.')
+    @result(SchemaAnimationGraphVariantResult)
+    async changeAnimationGraphVariant(
+        @param(SchemaUrlOrUUID) uuid: TUrlOrUUID,
+        @param(SchemaAnimationGraphVariantDump) dump: TAnimationGraphVariantDump
+    ): Promise<CommonResultType<TAnimationGraphVariantResult>> {
+        const ret: CommonResultType<TAnimationGraphVariantResult> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: undefined,
+        };
+
+        try {
+            ret.data = await assetManager.changeAnimationGraphVariant(uuid, dump);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('change animation graph variant fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    @tool('assets-animation-graph-variant-save')
+    @title('Save Animation Graph Variant')
+    @description('Save the pending AnimationGraphVariant edit created by query/change. This method takes only the asset UUID and writes the cached pending dump.')
+    @result(SchemaAnimationGraphVariantSaveResult)
+    async saveAnimationGraphVariant(
+        @param(SchemaUrlOrUUID) uuid: TUrlOrUUID
+    ): Promise<CommonResultType<TAnimationGraphVariantSaveResult>> {
+        const ret: CommonResultType<TAnimationGraphVariantSaveResult> = {
+            code: COMMON_STATUS.SUCCESS,
+            data: null,
+        };
+
+        try {
+            await assetManager.saveAnimationGraphVariant(uuid);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('save animation graph variant fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
 
@@ -430,9 +817,9 @@ export class AssetsApi {
      */
     @tool('assets-query-path')
     @title('Query Asset File Path') // 查询资源文件路径
-    @description('Query the actual path of an asset in the file system based on its URL or UUID. Returns an absolute path string.') // 根据资源的 URL 或 UUID 查询资源在文件系统中的实际路径。返回绝对路径字符串。
+    @description('Query the actual path of an asset in the file system based on its URL, UUID, or asset-db relative path such as assets/resources/Image/a.png. Returns an absolute path string.') // 根据资源的 URL、UUID 或 asset-db 相对路径查询资源在文件系统中的实际路径。返回绝对路径字符串。
     @result(SchemaPathResult)
-    async queryPath(@param(SchemaUrlOrUUID) urlOrUuid: TUrlOrUUID): Promise<CommonResultType<TPathResult>> {
+    async queryPath(@param(SchemaUrlOrUUIDOrPath) urlOrUuid: TUrlOrUUIDOrPath): Promise<CommonResultType<TPathResult>> {
         const code: HttpStatusCode = COMMON_STATUS.SUCCESS;
         const ret: CommonResultType<TPathResult> = {
             code: code,
@@ -441,8 +828,13 @@ export class AssetsApi {
 
         try {
             ret.data = assetManager.queryPath(urlOrUuid);
+            if (!ret.data) {
+                ret.code = COMMON_STATUS.NOT_FOUND;
+                ret.data = null;
+                ret.reason = `Asset path can not be found: ${urlOrUuid}. Please refresh asset db and try again.`;
+            }
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('query path fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -466,8 +858,13 @@ export class AssetsApi {
 
         try {
             ret.data = assetManager.queryUrl(uuidOrPath);
+            if (!ret.data) {
+                ret.code = COMMON_STATUS.NOT_FOUND;
+                ret.data = null;
+                ret.reason = `Asset URL can not be found: ${uuidOrPath}. Please refresh asset db and try again.`;
+            }
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('query URL fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -563,11 +960,11 @@ export class AssetsApi {
      */
     @tool('assets-rename-asset')
     @title('Rename Asset') // 重命名资源
-    @description('Rename the specified asset file. Supports renaming files and folders, with options to overwrite or automatically rename.') // 重命名指定的资源文件。支持重命名文件和文件夹，可选择是否覆盖或自动重命名。
+    @description('Rename the specified asset in its current directory. The source can be a URL, UUID, or path. The newName parameter only changes the asset name and does not move it across directories; use moveAsset for moving. For file assets, include the extension in newName. Supports overwrite or automatic rename on conflicts.') // 在资源当前目录内重命名指定资源。source 支持 URL、UUID 或路径。newName 仅修改名称，不负责跨目录移动；如需移动请使用 moveAsset。文件资源请在 newName 中包含后缀名。支持冲突时覆盖或自动重命名。
     @result(SchemaAssetInfoResult)
     async renameAsset(
-        @param(SchemaUrlOrUUIDOrPath) source: TDirOrDbPath,
-        @param(SchemaUrlOrUUIDOrPath) target: TDirOrDbPath,
+        @param(SchemaUrlOrUUIDOrPath) source: TUrlOrUUIDOrPath,
+        @param(SchemaAssetNewName) newName: TAssetNewName,
         @param(SchemaAssetRenameOptions) options: TAssetRenameOptions = {}
     ): Promise<CommonResultType<TAssetInfoResult>> {
         const code: HttpStatusCode = COMMON_STATUS.SUCCESS;
@@ -577,7 +974,7 @@ export class AssetsApi {
         };
 
         try {
-            ret.data = await assetManager.renameAsset(source, target, options);
+            ret.data = await assetManager.renameAsset(source, newName, options);
         } catch (e) {
             ret.code = COMMON_STATUS.FAIL;
             console.error('rename asset fail:', e instanceof Error ? e.message : String(e));
@@ -666,11 +1063,11 @@ export class AssetsApi {
             if (asset) {
                 ret.data = await assetManager.queryAssetUserDataConfig(asset);
             } else {
-                ret.code = COMMON_STATUS.FAIL;
+                ret.code = COMMON_STATUS.NOT_FOUND;
                 ret.reason = `❌Asset can not be found: ${urlOrUuidOrPath}`;
             }
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
+            ret.code = getCommonErrorStatus(e);
             console.error('query asset user data config fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
@@ -683,9 +1080,41 @@ export class AssetsApi {
      */
     @tool('assets-update-asset-user-data')
     @title('Update Asset User Data') // 更新资源用户数据
-    @description('Update the user data configuration of the specified asset. Precisely update the asset\'s user data via path and value, supporting nested path access.') // 更新指定资源的用户数据配置。通过路径和值来精确更新资源的用户数据，支持嵌套路径访问。
+    @description('Replace the complete userData object of the specified asset in one save. urlOrUuidOrPath accepts an asset URL, UUID, file path, or sub asset UUID in parentUuid@subMetaId format.') // 一次性整体替换指定资源的 userData，支持父资源与 parentUuid@subMetaId 子资源 UUID。
     @result(SchemaUpdateAssetUserDataResult)
     async updateAssetUserData(
+        @param(SchemaUrlOrUUIDOrPath) urlOrUuidOrPath: TUrlOrUUIDOrPath,
+        @param(SchemaUpdateAssetUserData) userData: TUpdateAssetUserData
+    ): Promise<CommonResultType<TUpdateAssetUserDataResult>> {
+        const code: HttpStatusCode = COMMON_STATUS.SUCCESS;
+        const ret: CommonResultType<TUpdateAssetUserDataResult> = {
+            code: code,
+            data: null,
+        };
+
+        try {
+            ret.data = await assetManager.updateUserData(urlOrUuidOrPath, userData);
+            if (!ret.data) {
+                ret.code = COMMON_STATUS.NOT_FOUND;
+                ret.reason = `❌Asset can not be found: ${urlOrUuidOrPath}. Please refresh asset db and try again.`;
+            }
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('update asset user data fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Update Asset User Data By Path // 按路径更新资源用户数据
+     */
+    @tool('assets-update-asset-user-data-by-path')
+    @title('Update Asset User Data By Path') // 按路径更新资源用户数据
+    @description('Update a single path in the userData of the specified asset. urlOrUuidOrPath accepts an asset URL, UUID, file path, or sub asset UUID in parentUuid@subMetaId format.') // 通过路径和值精确更新指定资源 userData 的单个字段，支持父资源与 parentUuid@subMetaId 子资源 UUID。
+    @result(SchemaUpdateAssetUserDataResult)
+    async updateAssetUserDataByPath(
         @param(SchemaUrlOrUUIDOrPath) urlOrUuidOrPath: TUrlOrUUIDOrPath,
         @param(SchemaUpdateAssetUserDataPath) path: TUpdateAssetUserDataPath,
         @param(SchemaUpdateAssetUserDataValue) value: TUpdateAssetUserDataValue
@@ -697,14 +1126,14 @@ export class AssetsApi {
         };
 
         try {
-            ret.data = await assetManager.updateUserData(urlOrUuidOrPath, path, value);
+            ret.data = await assetManager.updateUserDataByPath(urlOrUuidOrPath, path, value);
             if (!ret.data) {
-                ret.code = COMMON_STATUS.FAIL;
+                ret.code = COMMON_STATUS.NOT_FOUND;
                 ret.reason = `❌Asset can not be found: ${urlOrUuidOrPath}. Please refresh asset db and try again.`;
             }
         } catch (e) {
-            ret.code = COMMON_STATUS.FAIL;
-            console.error('update asset user data fail:', e instanceof Error ? e.message : String(e));
+            ret.code = getCommonErrorStatus(e);
+            console.error('update asset user data by path fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
 
@@ -730,6 +1159,33 @@ export class AssetsApi {
         } catch (e) {
             ret.code = COMMON_STATUS.FAIL;
             console.error('query asset config map fail:', e instanceof Error ? e.message : String(e));
+            ret.reason = e instanceof Error ? e.message : String(e);
+        }
+
+        return ret;
+    }
+
+    /**
+     * Query Asset Property Schema // 查询资源导入属性 schema
+     */
+    @tool('assets-query-property-schema')
+    @title('Query Asset Import Property Schema') // 查询资源导入属性 schema
+    @description('Query the standardized import property schema for a specific asset importer. The result is designed for panels to render import settings automatically and includes stable fields such as label, type, default, options, assetType, min, max, step, readOnly, and order. The raw field is only for debugging and should not be used as a UI contract.') // 查询指定资源导入器的标准化导入属性 schema，用于面板自动渲染导入设置。
+    @result(SchemaAssetPropertySchemaResult)
+    async queryPropertySchema(
+        @param(SchemaUserDataHandler) importer: TUserDataHandler
+    ): Promise<CommonResultType<TAssetPropertySchemaResult>> {
+        const code: HttpStatusCode = COMMON_STATUS.SUCCESS;
+        const ret: CommonResultType<TAssetPropertySchemaResult> = {
+            code: code,
+            data: {},
+        };
+
+        try {
+            ret.data = await assetManager.queryPropertySchema(importer);
+        } catch (e) {
+            ret.code = getCommonErrorStatus(e);
+            console.error('query asset property schema fail:', e instanceof Error ? e.message : String(e));
             ret.reason = e instanceof Error ? e.message : String(e);
         }
 

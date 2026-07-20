@@ -65,11 +65,6 @@ export const defaultMangleConfig: Record<MangleConfigPlatformType, IMangleConfig
         mangleList: [],
         dontMangleList: [],
     },
-    XIAOMI: {
-        extends: 'MINIGAME',
-        mangleList: [],
-        dontMangleList: [],
-    },
     ALIPAY: {
         extends: 'MINIGAME',
         mangleList: [],
@@ -95,17 +90,22 @@ export const defaultMangleConfig: Record<MangleConfigPlatformType, IMangleConfig
         mangleList: [],
         dontMangleList: [],
     },
-    MIGU: {
-        extends: 'MINIGAME',
-        mangleList: [],
-        dontMangleList: [],
-    },
     HONOR: {
         extends: 'MINIGAME',
         mangleList: [],
         dontMangleList: [],
     },
     COCOS_RUNTIME: {
+        extends: 'MINIGAME',
+        mangleList: [],
+        dontMangleList: [],
+    },
+    SUD: {
+        extends: 'MINIGAME',
+        mangleList: [],
+        dontMangleList: [],
+    },
+    SUDV2: {
         extends: 'MINIGAME',
         mangleList: [],
         dontMangleList: [],

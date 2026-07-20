@@ -4,6 +4,8 @@ import { IBaseConfiguration, ConfigurationScope, configurationRegistry } from '.
 import { IBuildCommonOptions } from '../@types';
 import { IBuilderConfigItem } from '../@types/protected';
 import { BuildConfiguration } from '../@types/config-export';
+import { createBuilderCoreMetadataNodes } from './metadata';
+import type { ICocosConfigurationPropertySchema } from '../../configuration/script/metadata';
 
 class BuilderConfig {
     /**
@@ -195,8 +197,8 @@ class BuilderConfig {
             type: 'string',
         },
         outputName: {
-            // 这个数据界面不显示，不需要 i18n
-            description: '构建的输出目录名，将会作为后续构建任务上的名称',
+            label: 'i18n:configuration.builder.platform.outputName.title',
+            description: 'i18n:configuration.builder.platform.outputName.description',
             default: '',
             type: 'string',
             verifyRules: ['required', 'normalName'],
@@ -478,12 +480,31 @@ class BuilderConfig {
         const project = await import('../../project');
 
         this._projectRoot = project.default.path;
-        this._buildTemplateDir = join(this._projectRoot, 'build-template');
-        this._projectTempDir = join(this._projectRoot, 'temp', 'builder',);
+        this._buildTemplateDir = join(this._projectRoot, 'build-templates');
+        this._projectTempDir = join(this._projectRoot, 'temp');
         this.commonOptionConfigs.name.default = project.default.getInfo().name || 'gameName';
-
         this._init = true;
-        this._configInstance = await configurationRegistry.register('builder', this.getDefaultConfig());
+        try {
+            const defaultConfig = this.getDefaultConfig();
+            const useCacheDefaults = defaultConfig.useCacheConfig ?? {
+                serializeData: true,
+                engine: true,
+                textureCompress: true,
+                autoAtlas: true,
+            };
+            this._configInstance = await configurationRegistry.register('builder', {
+                defaults: defaultConfig,
+                nodes: () => createBuilderCoreMetadataNodes(
+                    this.commonOptionConfigs as unknown as Record<string, ICocosConfigurationPropertySchema>,
+                    useCacheDefaults,
+                    defaultConfig.bundleConfig,
+                    defaultConfig.textureCompressConfig
+                ),
+            });
+        } catch (error) {
+            this._init = false;
+            throw error;
+        }
     }
 }
 

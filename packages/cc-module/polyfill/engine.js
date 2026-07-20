@@ -12,7 +12,7 @@ class Engine extends EventEmitter {
     off() { }
 
     getDesignResolutionSize() {
-        return { width: 1280, height: 760 }; // 手写的设计分辨率
+        return { width: 1280, height: 720 };
     }
 
     setDesignResolutionSize() { }
@@ -55,6 +55,11 @@ cc.require = function(request, originRequire) {
     loadingProjectScripts--;
     return m;
 };
+
+// 适配 Node.EventType（引擎导出了 NodeEventType 但未挂载到 Node 上）
+if (cc.Node && !cc.Node.EventType) {
+    cc.Node.EventType = cc.NodeEventType;
+}
 
 // 适配 cc._throw
 cc._throw = cc.error;

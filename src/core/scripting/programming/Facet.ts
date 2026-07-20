@@ -178,7 +178,7 @@ export class ProgrammingFacet {
         engineDistRoot: string,
         projectRoot: string,
     ) {
-        this._systemJsHomeDir = ps.join(projectRoot, 'temp', 'cli', 'programming', 'preview', 'systemjs');
+        this._systemJsHomeDir = ps.join(projectRoot, 'temp', 'programming', 'preview', 'systemjs');
         this._engineRoot = engineRoot;
         this._engineDistRoot = engineDistRoot;
         this._asyncIteration = new AsyncIterationConcurrency(async () => {

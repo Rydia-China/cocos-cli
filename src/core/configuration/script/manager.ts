@@ -59,6 +59,8 @@ export interface IConfigurationManager {
      * @param force 是否强制保存，默认为 false
      */
     save(force?: boolean): Promise<void>;
+
+    getConfigPath(): Promise<string>;
 }
 
 export class ConfigurationManager extends EventEmitter implements IConfigurationManager {
@@ -66,12 +68,13 @@ export class ConfigurationManager extends EventEmitter implements IConfiguration
     static VERSION: string = '1.0.0';
     static name = 'cocos.config.json';
     static SchemaPathSource = join(__dirname, '../../../../dist/cocos.config.schema.json');
-    static relativeSchemaPath = `./temp/cli/${path.basename(ConfigurationManager.SchemaPathSource)}`;
+    static relativeSchemaPath = `./temp/${path.basename(ConfigurationManager.SchemaPathSource)}`;
 
     private initialized: boolean = false;
     private projectPath: string = '';
     private configPath: string = '';
     private projectConfig: IConfiguration = {};
+    private saveQueue: Promise<void> = Promise.resolve();
 
     private _version: string = '0.0.0';
     get version(): string {
@@ -310,19 +313,35 @@ export class ConfigurationManager extends EventEmitter implements IConfiguration
         if (!force && !Object.keys(this.projectConfig).length) {
             return;
         }
+        const nextSave = this.saveQueue
+            .catch(() => undefined)
+            .then(async () => {
+                try {
+                    this.version = ConfigurationManager.VERSION;
+                    // 确保目录存在
+                    await fse.ensureDir(path.dirname(this.configPath));
+                    this.projectConfig.version = this.version;
+                    this.projectConfig.$schema = ConfigurationManager.relativeSchemaPath;
+                    // 保存配置文件
+                    await fse.writeJSON(this.configPath, this.projectConfig, { spaces: 4 });
+                    this.emit(MessageType.Save, this.projectConfig);
+                    newConsole.debug(`[Configuration] 已保存项目配置: ${this.configPath}`);
+                } catch (error) {
+                    newConsole.error(`[Configuration] 保存项目配置失败: ${this.configPath} - ${error}`);
+                    throw error;
+                }
+            });
+
+        this.saveQueue = nextSave;
+        return nextSave;
+    }
+
+    public async getConfigPath(): Promise<string> {
         try {
-            this.version = ConfigurationManager.VERSION;
-            // 确保目录存在
-            await fse.ensureDir(path.dirname(this.configPath));
-            this.projectConfig.version = this.version;
-            this.projectConfig.$schema = ConfigurationManager.relativeSchemaPath;
-            // 保存配置文件
-            await fse.writeJSON(this.configPath, this.projectConfig, { spaces: 4 });
-            this.emit(MessageType.Save, this.projectConfig);
-            newConsole.debug(`[Configuration] 已保存项目配置: ${this.configPath}`);
+            await this.ensureInitialized();
+            return this.configPath;
         } catch (error) {
-            newConsole.error(`[Configuration] 保存项目配置失败: ${this.configPath} - ${error}`);
-            throw error;
+            throw new Error(`[Configuration] Failed to get configuration file path: ${error}`);
         }
     }
 

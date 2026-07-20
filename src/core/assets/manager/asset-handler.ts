@@ -1,27 +1,24 @@
 import { Importer as AssetDBImporter, Asset, setDefaultUserData, get } from '@cocos/asset-db';
-import { copy, copyFile, ensureDir, existsSync, outputFile, outputJSON } from 'fs-extra';
-import { basename, dirname, extname, isAbsolute, join } from 'path';
+import { existsSync, outputJSON } from 'fs-extra';
+import { basename, extname, isAbsolute, join } from 'path';
 import { url2path } from '../utils';
 import lodash from 'lodash';
 import fg from 'fast-glob';
-import Sharp from 'sharp';
+
 import i18n from '../../base/i18n';
 import { IAsset, IExportData } from '../@types/protected/asset';
-import { ICONConfig, AssetHandler, CustomHandler, CustomAssetHandler, ICreateMenuInfo, CreateAssetOptions, ThumbnailSize, ThumbnailInfo, IExportOptions, IAssetConfig, ImporterHook } from '../@types/protected/asset-handler';
+import { AssetHandler, CustomHandler, CustomAssetHandler, ICreateMenuInfo, CreateAssetOptions, IExportOptions, IAssetConfig, ImporterHook, ThumbnailInfo, ThumbnailSize, IUerDataConfigItem } from '../@types/protected/asset-handler';
 import type { AssetHandlerInfo } from '../asset-handler/config';
 import assetConfig from '../asset-config';
+import { copyPath, createDirectoryPath, writePath } from './filesystem';
 import eol from 'eol';
+import { convertUserDataConfigToPropertySchema, mergeUserDataConfigForPropertySchema } from '../property-schema';
+import type { AssetPropertySchemaMap } from '../@types/public';
 
 interface HandlerInfo extends AssetHandlerInfo {
     pkgName: string;
     internal: boolean;
 }
-
-const databaseIconConfig: ICONConfig = {
-    type: 'icon',
-    value: 'database',
-    thumbnail: false,
-};
 
 export class CustomImporter extends AssetDBImporter {
     constructor(extensions: string[], assetHandler: AssetHandler) {
@@ -67,8 +64,6 @@ class AssetHandlerManager {
     name2custom: Record<string, CustomHandler> = {};
     importer2custom: Record<string, CustomHandler[]> = {};
 
-    _iconConfigMap: Record<string, ICONConfig> | null = null;
-
     // 用户配置里的 userData 缓存
     _userDataCache: Record<string, any> = {};
     // 导入器里注册的默认 userData 值， 注册后不可修改
@@ -81,7 +76,6 @@ class AssetHandlerManager {
         this.name2custom = {};
         this.importer2OperateRecord = {};
         this.importer2custom = {};
-        this._iconConfigMap = null;
     }
 
     compileEffect(_force: boolean) {
@@ -97,7 +91,7 @@ class AssetHandlerManager {
     async init() {
         const { assetHandlerInfos } = await import('../../assets/asset-handler/config');
         this.register('cocos-cli', assetHandlerInfos, true);
-        AssetHandlerManager.createTemplateRoot = await assetConfig.getProject('createTemplateRoot');
+        AssetHandlerManager.createTemplateRoot = assetConfig.data.createTemplateRoot;
         const { compileEffect, startAutoGenEffectBin, getEffectBinPath } = await import('../asset-handler');
         this.compileEffect = compileEffect;
         this.startAutoGenEffectBin = startAutoGenEffectBin;
@@ -112,6 +106,21 @@ class AssetHandlerManager {
             console.debug(`lazy register asset handler ${info.name}`);
             return this.activateRegister(info);
         }));
+    }
+
+    private async ensureHandler(importer: string) {
+        let handler = this.name2handler[importer];
+        if (handler) {
+            return handler;
+        }
+
+        const registerInfo = this.name2registerInfo[importer];
+        if (!registerInfo) {
+            return undefined;
+        }
+
+        await this.activateRegister(registerInfo);
+        return this.name2handler[importer];
     }
 
     private async activateRegister(registerInfos: HandlerInfo) {
@@ -293,11 +302,15 @@ class AssetHandlerManager {
      */
     async getCreateMap(): Promise<ICreateMenuInfo[]> {
         const result: Omit<ICreateMenuInfo, 'create'>[] = [];
-        for (const importer of Object.keys(this.name2handler)) {
+        const importers = Array.from(new Set([
+            ...Object.keys(this.name2registerInfo),
+            ...Object.keys(this.name2handler),
+        ]));
+        for (const importer of importers) {
             const createMenu = await this.getCreateMenuByName(importer);
             result.push(...createMenu);
         }
-        return result;
+        return result.map((item) => translateCreateMenuInfo(item));
     }
 
     /**
@@ -306,7 +319,7 @@ class AssetHandlerManager {
      * @returns 
      */
     async getCreateMenuByName(importer: string): Promise<ICreateMenuInfo[]> {
-        const handler = this.name2handler[importer];
+        const handler = await this.ensureHandler(importer);
         if (!handler || !handler.createInfo || !handler.createInfo.generateMenuInfo) {
             return [];
         }
@@ -372,41 +385,14 @@ class AssetHandlerManager {
             return false;
         }
         const assetTemplateDir = getUserTemplateDir(importer);
-        await ensureDir(assetTemplateDir);
-        await copy(templatePath, target);
+        await createDirectoryPath(assetTemplateDir);
+        await copyPath(templatePath, target);
         return true;
-    }
-
-    async queryIconConfigMap(): Promise<Record<string, ICONConfig>> {
-        if (this._iconConfigMap) {
-            return this._iconConfigMap;
-        }
-        const result: Record<string, ICONConfig> = {};
-        for (const importer of Object.keys(this.name2handler)) {
-            const handler = this.name2handler[importer];
-            if (!handler.iconInfo) {
-                result[importer] = {
-                    type: 'icon',
-                    value: importer,
-                    thumbnail: false,
-                };
-                continue;
-            }
-            const { default: defaultConfig, generateThumbnail } = handler.iconInfo;
-            result[importer] = {
-                ...defaultConfig,
-                thumbnail: !!generateThumbnail,
-            };
-        }
-        // 手动补充 database 的资源处理器
-        result['database'] = databaseIconConfig;
-        this._iconConfigMap = result;
-        return result;
     }
 
     /**
      * 创建资源
-     * @param options 
+     * @param options
      * @returns 返回资源创建地址
      */
     async createAsset(options: CreateAssetOptions): Promise<string> {
@@ -431,13 +417,13 @@ class AssetHandlerManager {
             if (options.template) {
                 const path = url2path(options.template);
                 if (existsSync(path)) {
-                    await copy(path, options.target, { overwrite: options.overwrite });
+                    await copyPath(path, options.target, { overwrite: options.overwrite });
                     await afterCreateAsset(options.target, options);
                     return options.target;
                 }
             }
             // content 不存在，新建一个文件夹
-            await ensureDir(options.target);
+            await createDirectoryPath(options.target);
         } else {
             if (typeof options.content === 'object') {
                 options.content = JSON.stringify(options.content, null, 4);
@@ -447,7 +433,7 @@ class AssetHandlerManager {
                 options.content = eol.auto(options.content);
             }
             // 部分自定义创建资源没有模板，内容为空，只需要一个空文件即可完成创建
-            await outputFile(options.target, options.content, 'utf8');
+            await writePath(options.target, options.content);
         }
         await afterCreateAsset(options.target, options);
         return options.target;
@@ -475,73 +461,10 @@ class AssetHandlerManager {
         if (typeof content === 'string' && asset.meta.importer === 'text') {
             content = eol.auto(content);
         }
-        await outputFile(asset.source, content);
+        await writePath(asset.source, content);
         return true;
     }
 
-    async generateThumbnail(asset: IAsset, size: number | ThumbnailSize = 'large'): Promise<ThumbnailInfo | null> {
-        if (!asset) {
-            return null;
-        }
-
-        // 无效资源需要等待重新导入
-        if (asset.invalid) {
-            return {
-                type: 'icon',
-                value: 'file',
-            };
-        }
-
-        const configMap = await this.queryIconConfigMap();
-        if (!configMap[asset.meta.importer]) {
-            return null;
-        }
-
-        const cacheDest = join(asset.temp, `thumbnail-${size}.png`);
-        if (existsSync(cacheDest)) {
-            return {
-                type: 'image',
-                value: cacheDest,
-            };
-        }
-        let data: ThumbnailInfo;
-        if (!configMap[asset.meta.importer].thumbnail) {
-            data = configMap[asset.meta.importer];
-        } else {
-            const assetHandler = this.name2handler[asset.meta.importer];
-            try {
-                data = await assetHandler.iconInfo!.generateThumbnail!(asset);
-            } catch (error) {
-                console.warn(error);
-                console.warn(`generateThumbnail failed for ${asset.url}`);
-                return null;
-            }
-        }
-        if (data.type === 'image') {
-            const file = isAbsolute(data.value) ? data.value : url2path(data.value);
-            // SVG 无需 resize
-            if (file.endsWith('.svg')) {
-                return data;
-            }
-            if (!existsSync(file)) {
-                return null;
-            }
-            try {
-                data.value = await resizeThumbnail(file, cacheDest, size);
-            } catch (error) {
-                console.warn(error);
-                console.warn(`resizeThumbnail failed for ${asset.url}`);
-            }
-        }
-        return data;
-    }
-
-    /**
-     * 生成某个资源的导出文件信息
-     * @param asset 
-     * @param options 
-     * @returns 
-     */
     async generateExportData(asset: IAsset, options?: IExportOptions): Promise<IExportData | null> {
         const assetHandler = this.name2handler[asset.meta.importer];
         if (!assetHandler || !assetHandler.exporter || !assetHandler.exporter.generateExportData) {
@@ -570,7 +493,9 @@ class AssetHandlerManager {
     /**
      * 查询各个资源的基本配置 MAP
      */
-    async queryAssetConfigMap(): Promise<Record<string, IAssetConfig>> {
+    async queryRawAssetConfigMap(): Promise<Record<string, IAssetConfig>> {
+        await this.activateRegisterAll();
+
         const result: Record<string, IAssetConfig> = {};
         for (const importer of Object.keys(this.name2handler)) {
             const handler = this.name2handler[importer];
@@ -579,9 +504,6 @@ class AssetHandlerManager {
                 description: handler.description,
                 docURL: handler.docURL,
             };
-            if (handler.iconInfo) {
-                config.iconInfo = handler.iconInfo.default;
-            }
 
             if (handler.userDataConfig) {
                 config.userDataConfig = handler.userDataConfig.default;
@@ -589,6 +511,27 @@ class AssetHandlerManager {
             result[importer] = config;
         }
         return result;
+    }
+
+    /**
+     * Query localized asset config map.
+     */
+    async queryAssetConfigMap(): Promise<Record<string, IAssetConfig>> {
+        const rawConfigMap = await this.queryRawAssetConfigMap();
+        return localizeAssetConfigMap(rawConfigMap);
+    }
+
+    queryThumbnailHandlers(): string[] {
+        return Object.keys(this.name2handler)
+            .filter(name => typeof this.name2handler[name].generateThumbnail === 'function');
+    }
+
+    async generateThumbnail(asset: IAsset, size?: ThumbnailSize): Promise<ThumbnailInfo | null> {
+        const handler = this.name2handler[asset.meta.importer];
+        if (handler && typeof handler.generateThumbnail === 'function') {
+            return handler.generateThumbnail(asset, size);
+        }
+        return null;
     }
 
     async queryUserDataConfig(asset: IAsset) {
@@ -614,6 +557,20 @@ class AssetHandlerManager {
         }
         return assetHandler.userDataConfig.default;
     }
+
+    async queryPropertySchema(importer: string): Promise<AssetPropertySchemaMap> {
+        const assetHandler = await this.ensureHandler(importer);
+        if (!assetHandler) {
+            throw new Error(`Asset handler not found: ${importer}`);
+        }
+
+        const propertyConfig = mergeUserDataConfigForPropertySchema(
+            assetHandler.userDataConfig?.default,
+            assetHandler.propertySchemaConfig,
+        );
+        return convertUserDataConfigToPropertySchema(propertyConfig);
+    }
+
     async runImporterHook(asset: IAsset, hookName: 'before' | 'after') {
         const assetHandler = this.name2handler[asset.meta.importer];
         // 1. 先执行资源处理器内的钩子
@@ -710,6 +667,9 @@ class AssetHandlerManager {
      * 更新默认配置数据并保存（偏好设置的用户操作修改入口）
      */
     public async updateDefaultUserData(handler: string, key: string, value: any): Promise<void> {
+        if (!this.name2handler[handler]) {
+            throw new Error(`Asset handler not found: ${handler}`);
+        }
         lodash.set(this._userDataCache, `${handler}.${key}`, value);
         this._updateDefaultUserDataToHandler(handler, key, value);
         const combineUserData = {
@@ -741,6 +701,79 @@ class AssetHandlerManager {
 const assetHandlerManager = new AssetHandlerManager();
 
 export default assetHandlerManager;
+
+function localizeAssetConfigMap(configMap: Record<string, IAssetConfig>): Record<string, IAssetConfig> {
+    const localizedConfigMap = lodash.cloneDeep(configMap);
+    for (const config of Object.values(localizedConfigMap)) {
+        localizeAssetConfig(config);
+    }
+    return localizedConfigMap;
+}
+
+function localizeAssetConfig(config: IAssetConfig): void {
+    config.displayName = translateAssetConfigText(config.displayName);
+    config.description = translateAssetConfigText(config.description);
+
+    if (config.userDataConfig) {
+        localizeUserDataConfig(config.userDataConfig);
+    }
+}
+
+function localizeUserDataConfig(config: Record<string, IUerDataConfigItem>): void {
+    for (const item of Object.values(config)) {
+        localizeUserDataConfigItem(item);
+    }
+}
+
+function localizeUserDataConfigItem(item: IUerDataConfigItem): void {
+    item.label = translateAssetConfigText(item.label);
+    item.description = translateAssetConfigText(item.description);
+
+    if (item.render?.items) {
+        item.render.items = item.render.items.map((option) => ({
+            ...option,
+            label: translateAssetConfigText(option.label) ?? option.label,
+        }));
+    }
+
+    if (!item.itemConfigs) {
+        return;
+    }
+
+    if (Array.isArray(item.itemConfigs)) {
+        item.itemConfigs.forEach((child) => {
+            localizeUserDataConfigItem(child);
+        });
+        return;
+    }
+
+    for (const child of Object.values(item.itemConfigs)) {
+        localizeUserDataConfigItem(child);
+    }
+}
+
+function translateAssetConfigText(value: string | undefined): string | undefined {
+    if (typeof value !== 'string' || value.length === 0) {
+        return value;
+    }
+
+    const i18nPrefix = 'i18n:';
+    if (!value.startsWith(i18nPrefix)) {
+        return value;
+    }
+
+    const key = value.slice(i18nPrefix.length);
+    if (!key) {
+        return value;
+    }
+
+    const translated = i18n.transI18nName(value);
+    if (translated && translated !== value) {
+        return translated;
+    }
+
+    return key;
+}
 
 function patchHandler(info: ICreateMenuInfo, handler: string, extensions: string[]) {
     // 避免污染原始 info 数据
@@ -779,29 +812,10 @@ function getUserTemplateDir(importer: string) {
     return join(AssetHandlerManager.createTemplateRoot, importer);
 }
 
-const SizeMap = {
-    large: 512,
-    small: 16,
-    middle: 128,
-};
-
-async function resizeThumbnail(src: string, dest: string, size: number | ThumbnailSize): Promise<string> {
-    if (size === 'origin') {
-        return src;
-    }
-    if (typeof size === 'string') {
-        size = SizeMap[size] || 16;
-    }
-    await ensureDir(dirname(dest));
-    const img = Sharp(src);
-    const width = (await img.metadata()).width;
-    // 如果图片尺寸小于缩略图尺寸，则直接拷贝
-    if (width && width <= size) {
-        await copyFile(src, dest);
-        return dest;
-    }
-    await img.resize(size).toFile(dest);
-    return dest;
+function translateCreateMenuInfo(info: ICreateMenuInfo): ICreateMenuInfo {
+    const translated = { ...info };
+    translated.label = i18n.transI18nName(translated.label);
+    return translated;
 }
 
 async function afterCreateAsset(paths: string | string[], options: CreateAssetOptions) {
@@ -824,9 +838,7 @@ async function afterCreateAsset(paths: string | string[], options: CreateAssetOp
             if (options.uuid) {
                 meta.uuid = options.uuid;
             }
-            await outputJSON(join(file + '.meta'), meta, {
-                spaces: 4,
-            });
+            await writePath(file + '.meta', JSON.stringify(meta, null, 4));
         }
     }
 }

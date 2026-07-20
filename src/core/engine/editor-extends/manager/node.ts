@@ -114,6 +114,44 @@ export default class NodeManager extends EventEmitter {
     }
 
     /**
+     * 更新节点父级关系，并同步该节点及其后代的路径索引。
+     */
+    updateNodeParent(uuid: string, newParentUuid?: string): string {
+        const node = this._map[uuid];
+        if (!node) {
+            return '';
+        }
+
+        const oldParentUuid = this._getParentUuid(uuid);
+        if (oldParentUuid === newParentUuid) {
+            return pathManager.getNodePath(uuid);
+        }
+
+        const newPath = pathManager.move(uuid, node.name, newParentUuid, oldParentUuid);
+        if (!newPath) {
+            return '';
+        }
+
+        if (oldParentUuid) {
+            const oldChildren = this._parentChildren.get(oldParentUuid);
+            oldChildren?.delete(uuid);
+        }
+        if (newParentUuid) {
+            if (!this._parentChildren.has(newParentUuid)) {
+                this._parentChildren.set(newParentUuid, new Set());
+            }
+            this._parentChildren.get(newParentUuid)!.add(uuid);
+        }
+
+        const finalName = newPath.split('/').pop();
+        if (finalName && node.name !== finalName) {
+            node.name = finalName;
+        }
+
+        return newPath;
+    }
+
+    /**
      * 获取一个节点数据，查的范围包括被删除的节点
      * @param uuid
      */
@@ -122,6 +160,9 @@ export default class NodeManager extends EventEmitter {
     }
 
     getNodeByPath(path: string): Node | null {
+        if (path === '/') {
+            return cc.director.getScene() ?? null;
+        }
         const result = pathManager.getNodeResult(path);
         if (result.error === 'Ambiguous') {
             throw new Error(`The path "${path}" is ambiguous. Multiple nodes found with case-insensitive match.`);
@@ -136,10 +177,22 @@ export default class NodeManager extends EventEmitter {
     }
 
     getNodePath(node: Node): string {
-        return pathManager.getNodePath(node.uuid);
+        if (!node?.uuid) {
+            return '';
+        }
+        const path = pathManager.getNodePath(node.uuid);
+        if (!path) {
+            const scene = cc.director.getScene();
+            return node === scene ? '/' : '';
+        }
+        return path;
     }
 
     getNodeUuidByPath(path: string): string | null {
+        if (path === '/') {
+            const scene = cc.director.getScene();
+            return scene ? scene.uuid : null;
+        }
         const uuid = pathManager.getNodeUuid(path);
         const node = uuid && this.getNode(uuid);
         return node ? node.uuid : null;
@@ -217,7 +270,7 @@ export default class NodeManager extends EventEmitter {
     }
 
     changeNodeUUID(oldUUID: string, newUUID: string) {
-        if (oldUUID === newUUID) {
+        if (!newUUID || oldUUID === newUUID) {
             return;
         }
 
@@ -233,6 +286,22 @@ export default class NodeManager extends EventEmitter {
 
         this._map[newUUID] = node;
         delete this._map[oldUUID];
+
+        // 同步父子索引：替换父节点 children Set 中的旧 UUID
+        for (const [, children] of this._parentChildren) {
+            if (children.has(oldUUID)) {
+                children.delete(oldUUID);
+                children.add(newUUID);
+                break;
+            }
+        }
+
+        // 同步父子索引：如果本节点是父节点，将 key 迁移到新 UUID
+        const childSet = this._parentChildren.get(oldUUID);
+        if (childSet) {
+            this._parentChildren.delete(oldUUID);
+            this._parentChildren.set(newUUID, childSet);
+        }
     }
 
 
@@ -272,28 +341,17 @@ export default class NodeManager extends EventEmitter {
      * 更新名称计数
      */
     private _updateNameCount(parentUuid: string, oldName: string | null, newName: string | null) {
-        const nameMap = pathManager.getNameMap(parentUuid);
-        if (!nameMap) {
+        const nameSet = pathManager.getNameSet(parentUuid);
+        if (!nameSet) {
             return;
         }
 
-        // 减少旧名称的计数
-        if (oldName && nameMap.has(oldName)) {
-            const count = nameMap.get(oldName)!;
-            if (count > 1) {
-                nameMap.set(oldName, count - 1);
-            } else {
-                nameMap.delete(oldName);
-            }
+        if (oldName) {
+            nameSet.delete(oldName);
         }
 
-        // 增加新名称的计数
         if (newName) {
-            if (!nameMap.has(newName)) {
-                nameMap.set(newName, 1);
-            } else {
-                nameMap.set(newName, nameMap.get(newName)! + 1);
-            }
+            nameSet.add(newName);
         }
     }
 }

@@ -14,7 +14,6 @@ import assetManager from '../../assets/manager/asset';
 import { Engine } from '../../engine';
 import builderConfig from './builder-config';
 import { validatorManager } from './validator-manager';
-import { CocosConfigLoader } from '../../configuration/migration/cocos-config-loader';
 interface ModuleConfig {
     match: (module: string) => boolean;
     default: string | boolean;
@@ -220,19 +219,40 @@ export function getDefaultStartScene() {
     return realScenes[0] && realScenes[0].uuid;
 }
 
-export async function checkBuildCommonOptionsByKey(key: string, value: any, options: IBuildTaskOption): Promise<BuildCheckResult | null> {
-    const res: BuildCheckResult = {
-        error: '',
-        newValue: value,
-        level: 'error',
+function translateCheckMessage(message: string): string {
+    return i18n.transI18nName(message) || message;
+}
+
+function createValidCheckResult(fixedValue?: unknown): BuildCheckResult {
+    const result: BuildCheckResult = {
+        valid: true,
     };
+    if (arguments.length > 0) {
+        result.fixedValue = fixedValue;
+    }
+    return result;
+}
+
+function createInvalidCheckResult(message: string, fixedValue?: unknown, level: BuildCheckResult['level'] = 'error'): BuildCheckResult {
+    const result: BuildCheckResult = {
+        valid: false,
+        level,
+        message: translateCheckMessage(message),
+    };
+    if (arguments.length > 1) {
+        result.fixedValue = fixedValue;
+    }
+    return result;
+}
+
+export async function checkBuildCommonOptionsByKey(key: string, value: any, options: IBuildTaskOption): Promise<BuildCheckResult | null> {
+    let res = createValidCheckResult();
     switch (key) {
         case 'scenes':
             {
                 const error = checkScenes(value) || false;
                 if (error instanceof Error) {
-                    res.error = error.message;
-                    res.newValue = getDefaultScenes();
+                    res = createInvalidCheckResult(error.message, getDefaultScenes());
                 }
                 return res;
             }
@@ -240,56 +260,50 @@ export async function checkBuildCommonOptionsByKey(key: string, value: any, opti
             {
                 const error = checkStartScene(value) || false;
                 if (error instanceof Error) {
-                    res.error = error.message;
-                    res.newValue = getDefaultStartScene();
+                    res = createInvalidCheckResult(error.message, getDefaultStartScene());
                 }
                 return res;
             }
         case 'mainBundleIsRemote':
             if (value && options.mainBundleCompressionType === BundleCompressionTypes.SUBPACKAGE) {
-                res.newValue = false;
-                res.error = ' bundle can not be remote when compression type is subpackage!';
+                res = createInvalidCheckResult(' bundle can not be remote when compression type is subpackage!', false);
             } else if (!value && options.mainBundleCompressionType === BundleCompressionTypes.ZIP) {
-                res.newValue = true;
-                res.error = ' bundle must be remote when compression type is zip!';
+                res = createInvalidCheckResult(' bundle must be remote when compression type is zip!', true);
             }
             return res;
         case 'outputName':
             if (!value) {
-                res.error = ' outputName can not be empty';
-                res.newValue = await calcValidOutputName(options.buildPath, options.platform, options.platform);
+                res = createInvalidCheckResult(' outputName can not be empty', await calcValidOutputName(options.buildPath, options.platform, options.platform));
             } else {
                 // HACK 原生平台不支持中文和特殊符号
                 if (NATIVE_PLATFORM.includes(options.platform) && checkIncludeChineseAndSymbol(value)) {
-                    res.error = 'i18n:builder.error.buildPathContainsChineseAndSymbol';
+                    res = createInvalidCheckResult('i18n:builder.error.buildPathContainsChineseAndSymbol');
                 }
             }
             break;
         case 'taskName':
             if (!value) {
-                res.error = ' taskName can not be empty';
-                res.newValue = options.outputName;
+                res = createInvalidCheckResult(' taskName can not be empty', options.outputName);
             }
             break;
         case 'buildPath':
             if (!value || value === 'project://') {
-                res.error = ' buildPath can not be empty';
-                res.newValue = 'project://build';
+                res = createInvalidCheckResult(' buildPath can not be empty', 'project://build');
             } else if (checkBuildPathIsInvalid(value)) {
-                res.error = 'buildPath is invalid!';
-                res.newValue = 'project://build';
+                res = createInvalidCheckResult('buildPath is invalid!', 'project://build');
             } else {
                 // 添加对旧版本相对路径的转换支持
                 if (typeof value === 'string' && value.startsWith('.')) {
                     value = 'project://' + value;
                 }
                 if (!value || !isAbsolute(Utils.Path.resolveToRaw(value))) {
-                    res.error = `buildPath(${value}) is invalid!`;
-                    res.newValue = 'project://build';
+                    res = createInvalidCheckResult(`buildPath(${value}) is invalid!`, 'project://build');
                 }
                 // hack 原生平台不支持中文和特殊符号
                 if (NATIVE_PLATFORM.includes(options.platform) && checkIncludeChineseAndSymbol(value)) {
-                    res.error = 'i18n:builder.error.buildPathContainsChineseAndSymbol';
+                    res = Object.prototype.hasOwnProperty.call(res, 'fixedValue')
+                        ? createInvalidCheckResult('i18n:builder.error.buildPathContainsChineseAndSymbol', res.fixedValue)
+                        : createInvalidCheckResult('i18n:builder.error.buildPathContainsChineseAndSymbol');
                 }
             }
             break;
@@ -300,19 +314,22 @@ export async function checkBuildCommonOptionsByKey(key: string, value: any, opti
         case 'experimentalEraseModules':
         case 'sourceMaps':
             if (value === 'true') {
-                res.newValue = true;
+                res = createValidCheckResult(true);
             } else if (value === 'false') {
-                res.newValue = false;
+                res = createValidCheckResult(false);
             }
             break;
         case 'server':
             {
-                res.error = await validatorManager.check(
+                const message = await validatorManager.check(
                     value,
                     builderConfig.commonOptionConfigs.server.verifyRules || [],
                     options,
                     options.platform + options.platform,
                 );
+                if (message) {
+                    res = createInvalidCheckResult(message);
+                }
             }
             break;
         default:
@@ -331,21 +348,16 @@ export async function checkBuildCommonOptions(options: any) {
     // const checkKeys = Array.from(new Set(Object.keys(commonOptions).concat(Object.keys(options))))
     // 正常来说应该检查默认值和 options 整合的 key
     for (const key of Object.keys(commonOptions)) {
-        checkResMap[key] = await checkBuildCommonOptionsByKey(key, options[key], options) || { newValue: options[key], error: '', level: 'error' };
+        checkResMap[key] = await checkBuildCommonOptionsByKey(key, options[key], options) || createValidCheckResult();
     }
     return checkResMap;
 }
 
-export function checkBundleCompressionSetting(value: BundleCompressionType, supportedCompressionTypes: BundleCompressionType[]) {
-    const result = {
-        error: '',
-        newValue: value,
-    };
+export function checkBundleCompressionSetting(value: BundleCompressionType, supportedCompressionTypes: BundleCompressionType[]): BuildCheckResult {
     if (supportedCompressionTypes && -1 === supportedCompressionTypes.indexOf(value)) {
-        result.newValue = BundleCompressionTypes.MERGE_DEP;
-        result.error = ` compression type(${value}) is invalid for this platform!`;
+        return createInvalidCheckResult(` compression type(${value}) is invalid for this platform!`, BundleCompressionTypes.MERGE_DEP);
     }
-    return result;
+    return createValidCheckResult();
 }
 /**
  * 整合构建配置的引擎模块配置
@@ -385,10 +397,47 @@ export function handleOverwriteProjectSettings(options: IBuildTaskOption) {
     }
 }
 
-export async function checkProjectSetting(options: IInternalBuildOptions | IInternalBundleBuildOptions) {
-    options.engineInfo = options.engineInfo || Engine.getInfo();
+function resolveIncludeModulesFromEngineConfig(
+    engineConfig: ReturnType<typeof Engine.getConfig> & {
+        configs?: Record<string, { includeModules?: string[] }>;
+        globalConfigKey?: string;
+    },
+    engineModulesConfigKey?: string,
+) {
+    if (engineModulesConfigKey) {
+        const includeModules = engineConfig.configs?.[engineModulesConfigKey]?.includeModules;
+        if (!includeModules?.length) {
+            throw new Error(`Invalid engineModulesConfigKey: ${engineModulesConfigKey}`);
+        }
+        return [...includeModules];
+    }
 
-    const { designResolution, renderPipeline, physicsConfig, customLayers, sortingLayers, macroConfig, includeModules } = Engine.getConfig();
+    if (engineConfig.includeModules?.length) {
+        return [...engineConfig.includeModules];
+    }
+
+    const selectedConfigKey = engineConfig.globalConfigKey || Object.keys(engineConfig.configs || {})[0];
+    const includeModules = selectedConfigKey ? engineConfig.configs?.[selectedConfigKey]?.includeModules : undefined;
+    return includeModules?.length ? [...includeModules] : [];
+}
+
+/**
+ * Fill `options.includeModules` from the project engine config (cocos.config.json) when it is empty,
+ * so the preview path produces the same `includeModules` as a formal build (checkProjectSetting).
+ * Does not override an already non-empty `includeModules`.
+ */
+export async function fillIncludeModulesFromProjectConfig(
+    options: { includeModules?: string[]; engineModulesConfigKey?: string },
+): Promise<void> {
+    if (!options.includeModules || !options.includeModules.length) {
+        options.includeModules = resolveIncludeModulesFromEngineConfig(Engine.getConfig(), options.engineModulesConfigKey);
+    }
+}
+
+export async function checkProjectSetting(options: IInternalBuildOptions | IInternalBundleBuildOptions) {    options.engineInfo = options.engineInfo || Engine.getInfo();
+
+    const engineConfig = Engine.getConfig();
+    const { designResolution, renderPipeline, physicsConfig, customLayers, sortingLayers, macroConfig } = engineConfig;
     // 默认 Canvas 设置
     if (!options.designResolution) {
         options.designResolution = designResolution;
@@ -429,7 +478,7 @@ export async function checkProjectSetting(options: IInternalBuildOptions | IInte
     }
 
     if (!options.includeModules || !options.includeModules.length) {
-        options.includeModules = includeModules;
+        options.includeModules = resolveIncludeModulesFromEngineConfig(engineConfig, options.engineModulesConfigKey);
     }
 
     // 确保 includeModules 中包含 'debug-renderer'
@@ -453,29 +502,3 @@ export async function checkProjectSetting(options: IInternalBuildOptions | IInte
 
 }
 
-/**
- * 从项目配置中补充 includeModules
- * 使用 CocosConfigLoader 加载 settings/v2/packages/engine.json 中的配置
- * @param options 构建选项
- */
-export async function fillIncludeModulesFromProjectConfig(options: IInternalBuildOptions | IInternalBundleBuildOptions | IBuildTaskOption): Promise<void> {
-    if (!options.includeModules || !options.includeModules.length) {
-        try {
-            const projectPath = builderConfig.projectRoot;
-            const configLoader = new CocosConfigLoader();
-            configLoader.initialize(projectPath);
-            const engineConfig = await configLoader.loadConfig('project', 'engine');
-            
-            if (engineConfig?.modules?.configs) {
-                const configs = engineConfig.modules.configs;
-                const globalConfigKey = engineConfig.modules.globalConfigKey || Object.keys(configs)[0];
-                
-                if (globalConfigKey && configs[globalConfigKey]?.includeModules) {
-                    options.includeModules = configs[globalConfigKey].includeModules;
-                }
-            }
-        } catch (error) {
-            console.warn(`[Build] 加载项目引擎配置失败，将使用默认配置: ${error}`);
-        }
-    }
-}

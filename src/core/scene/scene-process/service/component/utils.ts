@@ -190,10 +190,17 @@ class ComponentUtils {
         },
 
         Camera(component: Camera, node: Node) {
-            component.visibility = Layers.makeMaskInclude([Layers.Enum.UI_3D, Layers.Enum.UI_2D]);
-            component.projection = Camera.ProjectionType.ORTHO;
-            component.near = 0;
-            component.clearFlags = Camera.ClearFlag.DEPTH_ONLY;
+            const { Service } = require('../core/decorator');
+            if (Service.Camera?.is2D) {
+                component.visibility = Layers.makeMaskInclude([Layers.Enum.UI_3D, Layers.Enum.UI_2D]);
+                component.projection = Camera.ProjectionType.ORTHO;
+                component.near = 0;
+                component.clearFlags = Camera.ClearFlag.DEPTH_ONLY;
+            } else {
+                component.visibility = Layers.Enum.DEFAULT;
+                component.projection = Camera.ProjectionType.PERSPECTIVE;
+                component.clearFlags = Camera.ClearFlag.SKYBOX;
+            }
         },
     };
 
@@ -206,7 +213,10 @@ class ComponentUtils {
         if (typeof value !== 'string') {
             return false;
         }
-
+        //  组件的UUID的生成规则是IDGenerator指定的
+        if(/^Comp\.\d+$/.test(value)) {
+            return true;
+        }
         // UUID 正则匹配 (v1-v5)
         const uuidReg =
             /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
