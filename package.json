@@ -4,6 +4,10 @@
     "displayName": "Lunaverse Build Runner",
     "icon": "static/logo/logo.png",
     "description": "Internal Lunaverse build runner",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Rydia-China/cocos-cli.git"
+    },
     "main": "dist/index.js",
     "engines": {
         "vscode": ">=1.107.1",
