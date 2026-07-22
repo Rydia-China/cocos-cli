@@ -1,6 +1,6 @@
 {
     "name": "mobai-lv-build-runner",
-    "version": "0.0.1-alpha.27",
+    "version": "0.0.1-alpha.28",
     "displayName": "Lunaverse Build Runner",
     "icon": "static/logo/logo.png",
     "description": "Internal Lunaverse build runner",

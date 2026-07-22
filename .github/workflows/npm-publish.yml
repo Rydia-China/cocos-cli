@@ -117,6 +117,7 @@ jobs:
           npm run build:cc-module
           node workflow/prepare-dts.js
           npx tsc -p tsconfig.json --declaration false --declarationMap false
+          npm run build:platform-views
           npm run build:static-web
           node workflow/generate-schema.js
 
@@ -133,6 +134,8 @@ jobs:
             'dist/cli.js',
             'dist/index.js',
             'dist/cocos.config.schema.json',
+            'dist/core/builder/platforms/ios/src/config.js',
+            'dist/core/builder/platforms/web-mobile/src/config.js',
             'packages/engine-cache/dev-cli-runtime-cache.tgz',
             'packages/engine-cache/editor-runtime-cache.tgz',
             'packages/engine-compiler/dist/index.js',
