@@ -58,7 +58,7 @@ function matchPattern(path: string, pattern: string): boolean {
 }
 
 const useEditorFolderFeature = false; // TODO: 之后正式接入编辑器 Editor 目录后移除这个开关
-const PROJECT_SCRIPT_CACHE_VERSION = 1;
+const PROJECT_SCRIPT_CACHE_VERSION = 2;
 
 function getExternalEditorModules(cceModuleMap: Record<string, any>) {
     return Object.keys(cceModuleMap).filter(name => name !== 'mapLocation');
