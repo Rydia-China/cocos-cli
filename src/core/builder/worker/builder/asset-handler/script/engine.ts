@@ -114,12 +114,17 @@ async function buildEngine(options: IBuildEngineParam, ccEnvConstants: StatsQuer
     };
 
     const mangleConfigJsonPath = join(builderConfig.projectRoot, 'engine-mangle-config.json');
-    if (options.mangleProperties && !await fs.pathExists(mangleConfigJsonPath)) {
+    const shouldUseMangleConfig = options.mangleProperties && !ccEnvConstants.NATIVE;
+    if (shouldUseMangleConfig && !await fs.pathExists(mangleConfigJsonPath)) {
         console.debug(`mangleProperties is enabled, but engine-mangle-config.json not found, create default mangle configuration`);
         defaultMangleConfig.__doc_url__ = utils.Url.getDocUrl('advanced-topics/mangle-properties.html');
         await fs.writeJson(mangleConfigJsonPath, defaultMangleConfig, { spaces: 2 });
-    } else {
+    } else if (shouldUseMangleConfig) {
         console.debug(`mangleProperties is enabled, found engine-mangle-config.json, use it`);
+    } else if (options.mangleProperties) {
+        console.debug(`mangleProperties is enabled but unsupported on native platforms, ignore engine-mangle-config.json`);
+    } else {
+        console.debug(`mangleProperties is disabled, ignore engine-mangle-config.json`);
     }
 
     // 计算缓存名字，并检查状态
@@ -140,7 +145,7 @@ async function buildEngine(options: IBuildEngineParam, ccEnvConstants: StatsQuer
     const watchFilesRecordFile = `${output}.watch-files.json`;
     const metaFile = join(metaDir, exportsMetaFile);
 
-    if (options.useCache && await validateCache(output, watchFilesRecordFile) && await isValidMeta(metaFile)) {
+    if (options.useCache && await validateCache(output, watchFilesRecordFile) && await isValidMeta(metaFile, shouldUseMangleConfig)) {
         console.debug(`Use cache engine: {link(${output})}`);
         console.debug(`Use cache, md5String: ${md5String.split(',').join(',\n')}`);
         console.debug(`Use cache, options: ` + JSON.stringify(options, null, 2));
@@ -261,7 +266,7 @@ async function validateCache(cache: string, incrementalFile: string) {
     return true;
 }
 
-async function isValidMeta(metaFile: string) {
+async function isValidMeta(metaFile: string, shouldUseMangleConfig: boolean) {
     if (!await pathExists(metaFile)) {
         return false;
     }
@@ -283,7 +288,7 @@ async function isValidMeta(metaFile: string) {
     }
 
     const mangleConfigJsonPath = join(builderConfig.projectRoot, 'engine-mangle-config.json');
-    if (await fs.pathExists(mangleConfigJsonPath)) {
+    if (shouldUseMangleConfig && await fs.pathExists(mangleConfigJsonPath)) {
         const currentMangleConfigJsonMtime = (await fs.stat(mangleConfigJsonPath)).mtimeMs;
         const currentMangleConfigJsonReadableTime = new Date(currentMangleConfigJsonMtime).toLocaleString();
         const oldMangleConfigJsonMtime = (exportMeta as { mangleConfigJsonMtime?: number }).mangleConfigJsonMtime;
