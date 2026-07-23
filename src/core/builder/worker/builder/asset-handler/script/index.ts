@@ -143,19 +143,11 @@ export class ScriptBuilder {
             return;
         }
 
-        // 执行静态编译检查
-        // 注意：如果在 BuildCommand 中已经执行过，这里会重复执行。
-        // 但为了确保脚本编译的安全性，这里强制检查。
-        // 传入 temp/tsconfig.cocos.json，避免使用根目录 tsconfig 导致重复包含 d.ts
+        // 静态检查和 Rollup/Babel 互不依赖。成功构建时并行执行二者，
+        // 同时保留“任一失败则整体失败”的原有安全门。
+        // 传入 temp/tsconfig.cocos.json，避免使用根目录 tsconfig 导致重复包含 d.ts。
         const tsconfigPath = join(project.path, 'temp', 'tsconfig.cocos.json');
-        const checkResult = await runStaticCompileCheck(project.path, true, tsconfigPath);
-        if (!checkResult.passed) {
-            // 构建失败，抛出错误，错误码为 500
-            const errorMessage = checkResult.errorMessage || 'Found assets-related TypeScript errors';
-            const error = new Error(errorMessage);
-            (error as any).code = BuildExitCode.STATIC_COMPILE_ERROR;
-            throw error;
-        }
+        const staticCompileCheckPromise = runStaticCompileCheck(project.path, true, tsconfigPath);
         
         const cceModuleMap = script.queryCCEModuleMap();
         const buildScriptOptions: IBuildScriptFunctionOption & SharedSettings = {
@@ -175,7 +167,21 @@ export class ScriptBuilder {
                 cwd: project.path,
             }
         });
-        const res = await workerManager.runTask('build-script', 'buildScriptCommand', [buildScriptOptions], scriptBuilderLogDestMap.get(this));
+        const [checkResult, res] = await Promise.all([
+            staticCompileCheckPromise,
+            workerManager.runTask(
+                'build-script',
+                'buildScriptCommand',
+                [buildScriptOptions],
+                scriptBuilderLogDestMap.get(this),
+            ),
+        ]);
+        if (!checkResult.passed) {
+            const errorMessage = checkResult.errorMessage || 'Found assets-related TypeScript errors';
+            const error = new Error(errorMessage);
+            (error as any).code = BuildExitCode.STATIC_COMPILE_ERROR;
+            throw error;
+        }
         if (res) {
             if (res.scriptPackages) {
                 this.scriptPackages.push(...res.scriptPackages);
