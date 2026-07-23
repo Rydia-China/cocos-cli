@@ -41,6 +41,12 @@ interface ProjectScriptCacheRecord {
     }>;
 }
 
+interface ProjectScriptRollupCacheRecord {
+    version: number;
+    key: string;
+    caches: Array<rollup.RollupCache | null>;
+}
+
 interface Bundle {
     id: string | null;
     scripts: IAssetInfo[];
@@ -58,7 +64,10 @@ function matchPattern(path: string, pattern: string): boolean {
 }
 
 const useEditorFolderFeature = false; // TODO: 之后正式接入编辑器 Editor 目录后移除这个开关
-const PROJECT_SCRIPT_CACHE_VERSION = 2;
+const PROJECT_SCRIPT_CACHE_VERSION = 6;
+const NAMED_CHUNK_TRANSFORM_CACHE_VERSION = 2;
+const MOD_LO_TRANSFORM_CACHE_VERSION = 2;
+const MAX_PROJECT_SCRIPT_CACHE_CONFIGS = 8;
 
 function getExternalEditorModules(cceModuleMap: Record<string, any>) {
     return Object.keys(cceModuleMap).filter(name => name !== 'mapLocation');
@@ -269,6 +278,14 @@ export async function buildScriptCommand(
         importRestrictions,
         preserveSymlinks: options.preserveSymlinks,
     });
+    const modLoTransformCache = projectScriptCache
+        ? installModLoTransformCache(
+            modLo,
+            options.projectScriptCacheDir!,
+            projectScriptCache.key,
+            options.projectScriptCacheDependencies ?? [],
+        )
+        : null;
 
     const userImportMap = options.importMap;
 
@@ -327,7 +344,7 @@ export async function buildScriptCommand(
         rpModLo({ modLo }),
     ];
     if (modulePreservation === 'facade' || modulePreservation === 'erase') {
-        rollupPlugins.push(rpNamedChunk());
+        rollupPlugins.push(rpNamedChunk(options.projectScriptCacheDir));
     }
     if (options.sourceMaps) {
         rollupPlugins.push(rpSourcemaps());
@@ -381,6 +398,10 @@ export async function buildScriptCommand(
 
     const importMappings: Record<string, string> = {};
     const rollupWatchFiles = new Set<string>();
+    const restoredRollupCaches = projectScriptCache
+        ? await restoreProjectScriptRollupCaches(projectScriptCache)
+        : [];
+    const nextRollupCaches: Array<rollup.RollupCache | null> = [];
     // 如果开启了 bundleCommonChunk，则 iBundle 是 bundleIndex
     for (let iBundle = 0; iBundle < entryGroups.length; ++iBundle) {
         const entries = entryGroups[iBundle];
@@ -395,9 +416,11 @@ export async function buildScriptCommand(
             preserveModules: modulePreservation !== 'erase',
             external: ['cc'],
             onwarn: rollupWarningHandler,
+            cache: restoredRollupCaches[iBundle] ?? undefined,
         };
 
         const rollupBuild = await rollup.rollup(rollupOptions);
+        nextRollupCaches.push(rollupBuild.cache ?? null);
         for (const watchFile of rollupBuild.watchFiles) {
             rollupWatchFiles.add(normalizeProjectScriptWatchFile(watchFile));
         }
@@ -514,6 +537,7 @@ export async function buildScriptCommand(
         }
     }
 
+    modLoTransformCache?.report();
     bundleIdToNameChunk = null;
     res.importMappings = importMappings;
     if (projectScriptCache) {
@@ -522,6 +546,7 @@ export async function buildScriptCommand(
             options,
             res,
             rollupWatchFiles,
+            nextRollupCaches,
         );
     }
 
@@ -606,6 +631,7 @@ interface ResolvedProjectScriptCache {
     dir: string;
     key: string;
     recordPath: string;
+    rollupCachePath: string;
 }
 
 async function resolveProjectScriptCache(
@@ -616,6 +642,18 @@ async function resolveProjectScriptCache(
         version: PROJECT_SCRIPT_CACHE_VERSION,
         options: {
             ...options,
+            // IAssetInfo contains volatile import metadata that changes when a
+            // source file is edited. The bundler only consumes UUID and file
+            // path here; content validity is checked separately via watch-file
+            // digests and Rollup's own module cache.
+            bundles: options.bundles.map((bundle) => ({
+                id: bundle.id,
+                outFile: bundle.outFile,
+                scripts: bundle.scripts.map((script) => ({
+                    uuid: script.uuid,
+                    file: script.file,
+                })),
+            })),
             projectScriptCacheDir: undefined,
             projectScriptCacheDependencies: undefined,
         },
@@ -624,11 +662,66 @@ async function resolveProjectScriptCache(
         : value);
     const key = digestText(signature);
     const dir = ps.join(options.projectScriptCacheDir, key);
+    await pruneProjectScriptCaches(options.projectScriptCacheDir, key);
     return {
         dir,
         key,
         recordPath: ps.join(dir, 'record.json'),
+        rollupCachePath: ps.join(dir, 'rollup-cache.json'),
     };
+}
+
+let projectScriptCachePrunePromise: Promise<void> | null = null;
+
+async function pruneProjectScriptCaches(cacheRoot: string, currentKey: string): Promise<void> {
+    projectScriptCachePrunePromise ??= (async () => {
+        if (!await pathExists(cacheRoot)) return;
+        const entries = await fs.readdir(cacheRoot, { withFileTypes: true });
+        const validConfigDirs: Array<{ path: string; mtimeMs: number }> = [];
+        const stalePaths: string[] = [];
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            const entryPath = ps.join(cacheRoot, entry.name);
+            if (/^named-chunk-transform-v\d+$/.test(entry.name)) {
+                if (entry.name !== `named-chunk-transform-v${NAMED_CHUNK_TRANSFORM_CACHE_VERSION}`) {
+                    stalePaths.push(entryPath);
+                }
+                continue;
+            }
+            if (/^mod-lo-transform-v\d+$/.test(entry.name)) {
+                if (entry.name !== `mod-lo-transform-v${MOD_LO_TRANSFORM_CACHE_VERSION}`) {
+                    stalePaths.push(entryPath);
+                }
+                continue;
+            }
+            if (!/^[a-f0-9]{64}$/.test(entry.name) || entry.name === currentKey) continue;
+            const recordPath = ps.join(entryPath, 'record.json');
+            try {
+                const record = await fs.readJson(recordPath) as Partial<ProjectScriptCacheRecord>;
+                if (record.version !== PROJECT_SCRIPT_CACHE_VERSION) {
+                    stalePaths.push(entryPath);
+                    continue;
+                }
+                validConfigDirs.push({
+                    path: entryPath,
+                    mtimeMs: (await fs.stat(recordPath)).mtimeMs,
+                });
+            } catch {
+                stalePaths.push(entryPath);
+            }
+        }
+        validConfigDirs
+            .sort((left, right) => right.mtimeMs - left.mtimeMs)
+            .slice(MAX_PROJECT_SCRIPT_CACHE_CONFIGS - 1)
+            .forEach(({ path }) => stalePaths.push(path));
+        await Promise.all(Array.from(new Set(stalePaths)).map((stalePath) => (
+            fs.remove(stalePath)
+        )));
+        if (stalePaths.length > 0) {
+            console.log(`[project-script-cache] pruned ${new Set(stalePaths).size} stale cache path(s)`);
+        }
+    })();
+    await projectScriptCachePrunePromise;
 }
 
 async function restoreProjectScriptCache(
@@ -684,6 +777,7 @@ async function saveProjectScriptCache(
     options: IBuildScriptFunctionOption & SharedSettings,
     result: buildRes,
     rollupWatchFiles: ReadonlySet<string>,
+    rollupCaches: Array<rollup.RollupCache | null>,
 ): Promise<void> {
     const watchFilePaths = Array.from(new Set([
         ...rollupWatchFiles,
@@ -726,11 +820,39 @@ async function saveProjectScriptCache(
         watchFiles,
         outputs,
     };
+    const rollupCacheRecord: ProjectScriptRollupCacheRecord = {
+        version: PROJECT_SCRIPT_CACHE_VERSION,
+        key: cache.key,
+        caches: rollupCaches,
+    };
     await fs.outputJson(cache.recordPath, record);
+    await fs.outputJson(cache.rollupCachePath, rollupCacheRecord);
     console.log(
         `[project-script-cache] stored ${cache.key.slice(0, 12)} `
         + `(${watchFiles.length} inputs, ${outputs.length} outputs)`,
     );
+}
+
+async function restoreProjectScriptRollupCaches(
+    cache: ResolvedProjectScriptCache,
+): Promise<Array<rollup.RollupCache | null>> {
+    if (!await pathExists(cache.rollupCachePath)) return [];
+    try {
+        const record = await fs.readJson(cache.rollupCachePath) as ProjectScriptRollupCacheRecord;
+        if (record.version !== PROJECT_SCRIPT_CACHE_VERSION
+            || record.key !== cache.key
+            || !Array.isArray(record.caches)) {
+            return [];
+        }
+        console.log(
+            `[project-script-cache] incremental Rollup cache restored `
+            + `(${record.caches.length} group(s))`,
+        );
+        return record.caches;
+    } catch {
+        console.log('[project-script-cache] incremental Rollup cache unreadable');
+        return [];
+    }
 }
 
 async function collectProjectScriptOutputFiles(
@@ -773,6 +895,132 @@ function normalizeProjectScriptWatchFile(value: string): string {
     } catch {
         return value;
     }
+}
+
+interface ModLoModuleResult {
+    code: string;
+    map?: unknown;
+}
+
+interface CacheableModLoModule {
+    module(): ModLoModuleResult;
+}
+
+interface CacheableModLo {
+    load(url: URL): CacheableModLoModule;
+}
+
+function installModLoTransformCache(
+    modLo: ModLo,
+    projectScriptCacheDir: string,
+    projectScriptCacheKey: string,
+    dependencyPaths: string[],
+): { report(): void } {
+    const cacheableModLo = modLo as unknown as CacheableModLo;
+    const originalLoad = cacheableModLo.load.bind(cacheableModLo);
+    const configDigest = createHash('sha256')
+        .update(String(MOD_LO_TRANSFORM_CACHE_VERSION))
+        .update('\0')
+        .update(projectScriptCacheKey)
+        .update('\0')
+        .update(fs.readFileSync(__filename));
+    for (const dependencyPath of [...dependencyPaths].sort()) {
+        if (!fs.existsSync(dependencyPath)) continue;
+        configDigest
+            .update('\0')
+            .update(dependencyPath)
+            .update('\0')
+            .update(fs.readFileSync(dependencyPath));
+    }
+    const configDigestValue = configDigest.digest('hex');
+    const cacheDir = ps.join(
+        projectScriptCacheDir,
+        `mod-lo-transform-v${MOD_LO_TRANSFORM_CACHE_VERSION}`,
+    );
+    let cacheHits = 0;
+    let cacheMisses = 0;
+
+    cacheableModLo.load = (url: URL): CacheableModLoModule => {
+        const loaded = originalLoad(url);
+        const input = readModLoTransformCacheInput(url);
+        if (!input) return loaded;
+        const cacheKey = createHash('sha256')
+            .update(configDigestValue)
+            .update('\0')
+            .update(url.href)
+            .update('\0')
+            .update(input.source)
+            .update('\0')
+            .update(input.sourceMap ?? Buffer.alloc(0))
+            .digest('hex');
+        const cachePath = ps.join(cacheDir, `${cacheKey}.json`);
+        const originalModule = loaded.module.bind(loaded);
+        return new Proxy(loaded, {
+            get(target, property, receiver) {
+                if (property !== 'module') {
+                    return Reflect.get(target as object, property, receiver);
+                }
+                return (): ModLoModuleResult => {
+                    if (fs.existsSync(cachePath)) {
+                        try {
+                            const cached = fs.readJsonSync(cachePath) as ModLoModuleResult;
+                            if (typeof cached.code === 'string') {
+                                cacheHits += 1;
+                                return cached;
+                            }
+                        } catch {
+                            // A partial content-addressed entry is a safe miss.
+                        }
+                    }
+                    cacheMisses += 1;
+                    const result = originalModule();
+                    fs.ensureDirSync(cacheDir);
+                    const temporaryPath = `${cachePath}.${process.pid}.tmp`;
+                    fs.writeJsonSync(temporaryPath, result);
+                    fs.renameSync(temporaryPath, cachePath);
+                    return result;
+                };
+            },
+        });
+    };
+
+    return {
+        report() {
+            console.log(`[mod-lo-cache] ${cacheHits} hit(s), ${cacheMisses} miss(es)`);
+        },
+    };
+}
+
+function readModLoTransformCacheInput(url: URL): {
+    source: Buffer;
+    sourceMap: Buffer | null;
+} | null {
+    if (url.protocol !== 'file:') return null;
+    let filePath: string;
+    try {
+        filePath = fileURLToPath(url);
+    } catch {
+        return null;
+    }
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+    const source = fs.readFileSync(filePath);
+    const sourceText = source.toString('utf8');
+    const sourceMapReference = sourceText.match(
+        /(?:\/\/[#@]\s*sourceMappingURL=([^\s]+)|\/\*[#@]\s*sourceMappingURL=([^*\s]+)\s*\*\/)\s*$/,
+    );
+    const sourceMapValue = sourceMapReference?.[1] ?? sourceMapReference?.[2] ?? '';
+    if (!sourceMapValue
+        || sourceMapValue.startsWith('data:')
+        || /^[a-z][a-z0-9+.-]*:/i.test(sourceMapValue)) {
+        return { source, sourceMap: null };
+    }
+    const sourceMapPath = ps.resolve(ps.dirname(filePath), decodeURIComponent(sourceMapValue));
+    return {
+        source,
+        sourceMap: fs.existsSync(sourceMapPath) && fs.statSync(sourceMapPath).isFile()
+            ? fs.readFileSync(sourceMapPath)
+            : null,
+    };
 }
 
 export async function buildSystemJsCommand(options: IBuildSystemJsOption) {
@@ -868,12 +1116,31 @@ class ChunkBundler {
     }
 }
 
-function rpNamedChunk(): rollup.Plugin {
+function rpNamedChunk(projectScriptCacheDir?: string): rollup.Plugin {
+    let cacheHits = 0;
+    let cacheMisses = 0;
     return {
         name: 'named-chunk',
         renderChunk: async function (this, code, chunk, options) {
-
             const chunkId = getChunkUrl(chunk);
+            const cachePath = projectScriptCacheDir
+                ? await resolveNamedChunkTransformCachePath(projectScriptCacheDir, chunkId, code)
+                : null;
+            if (cachePath && await pathExists(cachePath)) {
+                try {
+                    const cached = await fs.readJson(cachePath) as babel.BabelFileResult;
+                    if (typeof cached.code === 'string') {
+                        cacheHits += 1;
+                        return {
+                            code: cached.code,
+                            map: cached.map,
+                        };
+                    }
+                } catch {
+                    // A partial or stale content-addressed entry is a safe miss.
+                }
+            }
+            cacheMisses += 1;
             const transformResult = await babel.transformAsync(code, {
                 sourceMaps: true,
                 compact: false,
@@ -883,12 +1150,51 @@ function rpNamedChunk(): rollup.Plugin {
                 this.warn('Failed to render chunk.');
                 return null;
             }
+            if (cachePath) {
+                await fs.outputJson(cachePath, {
+                    code: transformResult.code,
+                    map: transformResult.map,
+                });
+            }
             return {
                 code: transformResult.code!,
                 map: transformResult.map,
             };
         },
+        generateBundle() {
+            if (!projectScriptCacheDir) return;
+            console.log(
+                `[named-chunk-cache] ${cacheHits} hit(s), ${cacheMisses} miss(es)`,
+            );
+        },
     };
+}
+
+let buildScriptDigestPromise: Promise<string> | null = null;
+
+async function resolveNamedChunkTransformCachePath(
+    projectScriptCacheDir: string,
+    chunkId: string,
+    code: string,
+): Promise<string> {
+    buildScriptDigestPromise ??= digestFile(__filename);
+    const buildScriptDigest = await buildScriptDigestPromise;
+    const digest = createHash('sha256')
+        .update(String(NAMED_CHUNK_TRANSFORM_CACHE_VERSION))
+        .update('\0')
+        .update(babel.version)
+        .update('\0')
+        .update(buildScriptDigest)
+        .update('\0')
+        .update(chunkId)
+        .update('\0')
+        .update(code)
+        .digest('hex');
+    return ps.join(
+        projectScriptCacheDir,
+        `named-chunk-transform-v${NAMED_CHUNK_TRANSFORM_CACHE_VERSION}`,
+        `${digest}.json`,
+    );
 }
 
 function getChunkUrl(chunk: rollup.RenderedChunk) {
