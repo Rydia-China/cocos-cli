@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { exec } from 'child_process';
+import fs from 'fs-extra';
 import path from 'path';
 import { promisify } from 'util';
 
@@ -101,9 +102,11 @@ export async function runStaticCompileCheck(projectPath: string, showOutput: boo
     // 增加 --project 参数指定使用的 tsconfig.json，避免使用默认的项目根目录配置从而包含不需要的 d.ts 文件
     // 输出在代码中统一过滤，保证跨平台一致性
     const finalTsconfigPath = tsconfigPath || path.join(projectPath, 'temp', 'tsconfig.cocos.json');
+    const tsBuildInfoPath = path.join(projectPath, 'temp', 'builder', 'static-compile.tsbuildinfo');
+    await fs.ensureDir(path.dirname(tsBuildInfoPath));
     const command = isWindows() 
-    ? `npx tsc --noEmit --project "${finalTsconfigPath}" 2>&1 | findstr /i "assets"`
-    : `tsc --noEmit --project "${finalTsconfigPath}" 2>&1`;
+    ? `npx tsc --noEmit --incremental --tsBuildInfoFile "${tsBuildInfoPath}" --project "${finalTsconfigPath}" 2>&1 | findstr /i "assets"`
+    : `tsc --noEmit --incremental --tsBuildInfoFile "${tsBuildInfoPath}" --project "${finalTsconfigPath}" 2>&1`;
     const shell = getShell();
 
     try {
