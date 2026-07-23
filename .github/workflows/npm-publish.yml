@@ -120,6 +120,7 @@ jobs:
           npm run build:platform-views
           npm run build:static-web
           node workflow/generate-schema.js
+          node workflow/ensure-cli-entry.js
 
       - name: Verify package contents
         run: |
@@ -145,6 +146,12 @@ jobs:
           const missing = required.filter((file) => !files.has(file));
           if (missing.length > 0) {
             console.error(`Package is missing required files: ${missing.join(', ')}`);
+            process.exit(1);
+          }
+
+          const cliMode = fs.statSync('dist/cli.js').mode;
+          if (process.platform !== 'win32' && (cliMode & 0o111) === 0) {
+            console.error('dist/cli.js is not executable.');
             process.exit(1);
           }
 

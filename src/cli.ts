@@ -6,6 +6,7 @@ import { Command } from 'commander';
 import { BuildCommand, McpServerCommand, CommandRegistry, CreateCommand, MakeCommand, RunCommand, UploadCommand } from './commands';
 import { config } from './display/config';
 import { PreviewCommand } from './commands/preview';
+import packageMetadata from '../package.json';
 
 const program = new Command();
 
@@ -13,7 +14,7 @@ const program = new Command();
 program
     .name('cocos')
     .description('Internal Lunaverse build runner')
-    .version('0.0.1-alpha.27')
+    .version(packageMetadata.version)
     .option('--debug', 'Enable debug mode')
     .option('--no-interactive', 'Disable interactive mode (for CI)')
     .option('--config <path>', 'Specify config file path');
