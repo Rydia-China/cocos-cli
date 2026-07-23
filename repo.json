@@ -3,7 +3,7 @@
         "repo": "https://github.com/Rydia-China/cocos4.git",
         "dist": "packages/engine",
         "branch": "codex/label-underline-style",
-        "commit": "dbb29fb4325e20ce47974d5e2c38105f5de70615"
+        "commit": "d6eadc11cc938215c2d4c1ad6ea5ea63e844c4bc"
     },
     "external": {
         "repo": "https://github.com/Rydia-China/cocos-engine-external.git",
