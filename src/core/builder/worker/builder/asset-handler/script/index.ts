@@ -157,6 +157,14 @@ export class ScriptBuilder {
             uuidCompressMap,
             applicationJS: '',
             cceModuleMap,
+            projectScriptCacheDir: join(project.path, 'temp', 'builder', 'project-script-cache'),
+            projectScriptCacheDependencies: [
+                join(project.path, 'package.json'),
+                join(project.path, 'package-lock.json'),
+                join(project.path, 'pnpm-lock.yaml'),
+                join(project.path, 'yarn.lock'),
+                tsconfigPath,
+            ],
         };
 
         // 项目脚本编译目前编译内存占用较大，需要独立进程管理

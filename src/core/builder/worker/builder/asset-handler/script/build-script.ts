@@ -1,4 +1,5 @@
 import fs, { pathExists } from 'fs-extra';
+import { createHash } from 'crypto';
 import { ModLo, ImportMap } from '@cocos/creator-programming-mod-lo/lib/mod-lo';
 import rpModLo from '@cocos/creator-programming-rollup-plugin-mod-lo';
 import toNamedRegister from '../../utils/to-named-register';
@@ -26,6 +27,20 @@ interface buildRes {
     importMappings: Record<string, string>;
 }
 
+interface ProjectScriptCacheRecord {
+    version: number;
+    key: string;
+    result: buildRes;
+    watchFiles: Array<{
+        path: string;
+        digest: string;
+    }>;
+    outputs: Array<{
+        target: string;
+        cached: string;
+    }>;
+}
+
 interface Bundle {
     id: string | null;
     scripts: IAssetInfo[];
@@ -43,6 +58,7 @@ function matchPattern(path: string, pattern: string): boolean {
 }
 
 const useEditorFolderFeature = false; // TODO: 之后正式接入编辑器 Editor 目录后移除这个开关
+const PROJECT_SCRIPT_CACHE_VERSION = 1;
 
 function getExternalEditorModules(cceModuleMap: Record<string, any>) {
     return Object.keys(cceModuleMap).filter(name => name !== 'mapLocation');
@@ -92,6 +108,16 @@ export async function buildScriptCommand(
     };
     if (options.bundles.length === 0) {
         return res;
+    }
+
+    const projectScriptCache = await resolveProjectScriptCache(options);
+    if (projectScriptCache) {
+        const restored = await restoreProjectScriptCache(projectScriptCache);
+        if (restored) {
+            console.log(`[project-script-cache] hit ${projectScriptCache.key.slice(0, 12)}`);
+            return restored;
+        }
+        console.log(`[project-script-cache] miss ${projectScriptCache.key.slice(0, 12)}`);
     }
 
     const sourceMaps = options.sourceMaps;
@@ -354,6 +380,7 @@ export async function buildScriptCommand(
     };
 
     const importMappings: Record<string, string> = {};
+    const rollupWatchFiles = new Set<string>();
     // 如果开启了 bundleCommonChunk，则 iBundle 是 bundleIndex
     for (let iBundle = 0; iBundle < entryGroups.length; ++iBundle) {
         const entries = entryGroups[iBundle];
@@ -371,6 +398,9 @@ export async function buildScriptCommand(
         };
 
         const rollupBuild = await rollup.rollup(rollupOptions);
+        for (const watchFile of rollupBuild.watchFiles) {
+            rollupWatchFiles.add(normalizeProjectScriptWatchFile(watchFile));
+        }
 
         const rollupOutputOptions: rollup.OutputOptions = {
             sourcemap: options.sourceMaps,
@@ -486,6 +516,14 @@ export async function buildScriptCommand(
 
     bundleIdToNameChunk = null;
     res.importMappings = importMappings;
+    if (projectScriptCache) {
+        await saveProjectScriptCache(
+            projectScriptCache,
+            options,
+            res,
+            rollupWatchFiles,
+        );
+    }
 
     function makePrerequisiteImports(modules: string[]) {
         return modules.sort()
@@ -553,6 +591,188 @@ export interface IBuildScriptFunctionOption {
     bundleCommonChunk?: boolean;
 
     cceModuleMap: Record<string, any>;
+
+    /**
+     * Optional persistent cache for project Rollup/Babel output. Cache hits
+     * are accepted only after hashing every file Rollup read on the last run.
+     */
+    projectScriptCacheDir?: string;
+
+    /** Extra files that affect module resolution but may not appear in Rollup watchFiles. */
+    projectScriptCacheDependencies?: string[];
+}
+
+interface ResolvedProjectScriptCache {
+    dir: string;
+    key: string;
+    recordPath: string;
+}
+
+async function resolveProjectScriptCache(
+    options: IBuildScriptFunctionOption & SharedSettings,
+): Promise<ResolvedProjectScriptCache | null> {
+    if (!options.projectScriptCacheDir || options.modulePreservation === 'preserve') return null;
+    const signature = JSON.stringify({
+        version: PROJECT_SCRIPT_CACHE_VERSION,
+        options: {
+            ...options,
+            projectScriptCacheDir: undefined,
+            projectScriptCacheDependencies: undefined,
+        },
+    }, (_key, value) => value instanceof RegExp
+        ? { source: value.source, flags: value.flags }
+        : value);
+    const key = digestText(signature);
+    const dir = ps.join(options.projectScriptCacheDir, key);
+    return {
+        dir,
+        key,
+        recordPath: ps.join(dir, 'record.json'),
+    };
+}
+
+async function restoreProjectScriptCache(
+    cache: ResolvedProjectScriptCache,
+): Promise<buildRes | null> {
+    if (!await pathExists(cache.recordPath)) {
+        console.log('[project-script-cache] record missing');
+        return null;
+    }
+    let record: ProjectScriptCacheRecord;
+    try {
+        record = await fs.readJson(cache.recordPath) as ProjectScriptCacheRecord;
+    } catch {
+        console.log('[project-script-cache] record unreadable');
+        return null;
+    }
+    if (record.version !== PROJECT_SCRIPT_CACHE_VERSION || record.key !== cache.key) {
+        console.log('[project-script-cache] record version/key mismatch');
+        return null;
+    }
+    if (record.watchFiles.length === 0 || record.outputs.length === 0) {
+        console.log('[project-script-cache] record is incomplete');
+        return null;
+    }
+    for (const watchFile of record.watchFiles) {
+        if (!await pathExists(watchFile.path)) {
+            console.log(`[project-script-cache] input missing: ${watchFile.path}`);
+            return null;
+        }
+        if (await digestFile(watchFile.path) !== watchFile.digest) {
+            console.log(`[project-script-cache] input changed: ${watchFile.path}`);
+            return null;
+        }
+    }
+    for (const output of record.outputs) {
+        const cachedPath = ps.join(cache.dir, output.cached);
+        if (!await pathExists(cachedPath)) {
+            console.log(`[project-script-cache] output missing: ${cachedPath}`);
+            return null;
+        }
+    }
+    for (const output of record.outputs) {
+        await fs.copy(ps.join(cache.dir, output.cached), output.target, { overwrite: true });
+    }
+    return {
+        scriptPackages: [...record.result.scriptPackages],
+        importMappings: { ...record.result.importMappings },
+    };
+}
+
+async function saveProjectScriptCache(
+    cache: ResolvedProjectScriptCache,
+    options: IBuildScriptFunctionOption & SharedSettings,
+    result: buildRes,
+    rollupWatchFiles: ReadonlySet<string>,
+): Promise<void> {
+    const watchFilePaths = Array.from(new Set([
+        ...rollupWatchFiles,
+        ...options.bundles.flatMap((bundle) => bundle.scripts.map((script) => script.file)),
+        ...(options.projectScriptCacheDependencies ?? []),
+        __filename,
+    ]))
+        .filter((filePath) => typeof filePath === 'string' && filePath.length > 0)
+        .sort();
+    const watchFiles: ProjectScriptCacheRecord['watchFiles'] = [];
+    for (const filePath of watchFilePaths) {
+        if (!await pathExists(filePath)) continue;
+        watchFiles.push({
+            path: filePath,
+            digest: await digestFile(filePath),
+        });
+    }
+
+    const outputTargets = await collectProjectScriptOutputFiles(options, result);
+    if (watchFiles.length === 0 || outputTargets.length === 0) {
+        console.log('[project-script-cache] skipped storing incomplete cache inputs/outputs');
+        return;
+    }
+    await fs.emptyDir(cache.dir);
+    const outputs: ProjectScriptCacheRecord['outputs'] = [];
+    for (let index = 0; index < outputTargets.length; index += 1) {
+        const target = outputTargets[index];
+        const cached = ps.join('files', `${index}${ps.extname(target)}`);
+        await fs.copy(target, ps.join(cache.dir, cached), { overwrite: true });
+        outputs.push({ target, cached });
+    }
+
+    const record: ProjectScriptCacheRecord = {
+        version: PROJECT_SCRIPT_CACHE_VERSION,
+        key: cache.key,
+        result: {
+            scriptPackages: [...result.scriptPackages],
+            importMappings: { ...result.importMappings },
+        },
+        watchFiles,
+        outputs,
+    };
+    await fs.outputJson(cache.recordPath, record);
+    console.log(
+        `[project-script-cache] stored ${cache.key.slice(0, 12)} `
+        + `(${watchFiles.length} inputs, ${outputs.length} outputs)`,
+    );
+}
+
+async function collectProjectScriptOutputFiles(
+    options: IBuildScriptFunctionOption,
+    result: buildRes,
+): Promise<string[]> {
+    const candidates = new Set<string>();
+    for (const bundle of options.bundles) {
+        candidates.add(bundle.outFile);
+        candidates.add(`${bundle.outFile}.map`);
+    }
+    for (const scriptPackage of result.scriptPackages) {
+        candidates.add(scriptPackage);
+        candidates.add(`${scriptPackage}.map`);
+    }
+    if (options.modulePreservation !== 'preserve') {
+        const commonBundle = ps.join(options.commonDir, 'bundle.js');
+        candidates.add(commonBundle);
+        candidates.add(`${commonBundle}.map`);
+    }
+    const outputs: string[] = [];
+    for (const candidate of Array.from(candidates).sort()) {
+        if (await pathExists(candidate)) outputs.push(candidate);
+    }
+    return outputs;
+}
+
+async function digestFile(filePath: string): Promise<string> {
+    return createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
+}
+
+function digestText(value: string): string {
+    return createHash('sha256').update(value).digest('hex');
+}
+
+function normalizeProjectScriptWatchFile(value: string): string {
+    if (!value.startsWith('file:')) return value;
+    try {
+        return fileURLToPath(value);
+    } catch {
+        return value;
+    }
 }
 
 export async function buildSystemJsCommand(options: IBuildSystemJsOption) {
