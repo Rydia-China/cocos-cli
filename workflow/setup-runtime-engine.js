@@ -123,9 +123,18 @@ async function ensureEngineBuild(engineConfig) {
     const { compileEngine } = require(compilerPath);
     try {
         console.log('Compiling engine cache for native/editor runtime...');
-        await compileEngine(engineDir);
-        console.log('Compiling engine cache for web runtime...');
-        await compileEngine(engineDir, true);
+        if (process.platform === 'linux') {
+            // Separate processes release compiler ASTs before the next runtime starts.
+            // Hosted Linux runners otherwise hit Node's default ~2 GB heap limit.
+            const compile = 'require(process.argv[1]).compileEngine(process.argv[2], process.argv[3] === "web").catch(error => { console.error(error); process.exit(1); })';
+            run(process.execPath, ['--max-old-space-size=4096', '-e', compile, compilerPath, engineDir, 'editor']);
+            console.log('Compiling engine cache for web runtime...');
+            run(process.execPath, ['--max-old-space-size=4096', '-e', compile, compilerPath, engineDir, 'web']);
+        } else {
+            await compileEngine(engineDir);
+            console.log('Compiling engine cache for web runtime...');
+            await compileEngine(engineDir, true);
+        }
     } catch (error) {
         logCompileError(error);
         throw error;
