@@ -21,7 +21,9 @@ export const run = nativeCommonHook.run;
 export async function onAfterInit(this: IBuilder, options: IAndroidInternalBuildOptions, result: IBuildResult, _cache: BuilderCache) {
     await nativeCommonHook.onAfterInit.call(this, options, result);
 
-    const android = await generateAndroidOptions(options);
+    const android = process.env.LUNAVERSE_BUNDLE_ONLY === '1'
+        ? options.packages.android
+        : await generateAndroidOptions(options);
     options.packages.android = android;
 
     const renderBackEnd = android.renderBackEnd;

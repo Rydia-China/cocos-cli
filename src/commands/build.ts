@@ -15,11 +15,19 @@ export class BuildCommand extends BaseCommand {
             .requiredOption('-j, --project <path>', 'Path to the Cocos project (required)')
             .requiredOption('-p, --platform <platform>', 'Target platform (web-desktop, web-mobile, android, ios, etc.)')
             .option('-c,--build-config <path>', 'Specify build config file path')
+            .option('--bundle-only', 'Build iOS/Android scripts and assets without native projects or SDK toolchains')
             .option('--ndkPath <path>', 'Android NDK path (for Android platform)')
             .option('--sdkPath <path>', 'Android SDK path (for Android platform)')
             .action(async (options: any) => {
                 try {
                     const resolvedPath = this.validateProjectPath(options.project);
+                    if (options.bundleOnly) {
+                        if (!['ios', 'android'].includes(options.platform)) {
+                            throw new Error('--bundle-only supports only ios and android.');
+                        }
+                        process.env.LUNAVERSE_BUNDLE_ONLY = '1';
+                    }
+
 
                     if (options.buildConfig) {
                         if (!existsSync(options.buildConfig)) {

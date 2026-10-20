@@ -25,6 +25,15 @@ import nativePackToolMg from './pack-tool/manager';
 
 export const throwError = true;
 
+function isBundleOnlyBuild(options: ITaskOption): boolean {
+    if (process.env.LUNAVERSE_BUNDLE_ONLY !== '1') return false;
+    if (options.platform !== 'ios' && options.platform !== 'android') {
+        throw new Error('Bundle-only builds support only ios and android.');
+    }
+    return true;
+}
+
+
 function fixPath(p: string): string {
     if (os.platform() === 'win32') {
         return p.replace(/\\/g, '/').replace(/\/+/, '/');
@@ -42,7 +51,7 @@ async function genCocosParams(options: ITaskOption, result: InternalBuildResult)
         buildDir: dirname(result.paths.dir),
         buildAssetsDir: result.paths.dir,
         projDir: result.paths.projectRoot,
-        cmakePath: await getCmakePath(),
+        cmakePath: isBundleOnlyBuild(options) ? '' : await getCmakePath(),
         nativeEnginePath: engineInfo.native.path,
         enginePath: engineInfo.typescript.path,
         projectName: name,
@@ -147,6 +156,12 @@ class ShareDataInHooks {
 
 // ******************* 钩子函数入口 ******************
 export function onBeforeBuild(options: ITaskOption) {
+    if (isBundleOnlyBuild(options)) {
+        const native = options.packages[options.platform];
+        if (native.encrypted || native.compressZip) {
+            throw new Error('Bundle-only mode does not support native script encryption/compression.');
+        }
+    }
     // 修改此参数以避免构建时清空原目录
     options.useCache = true;
 }
@@ -273,9 +288,11 @@ export async function onAfterCompressSettings(this: IBuilder, options: ITaskOpti
     // 1. 原生工程模板要尽早生成方便后续其他构建插件（service）做一些原生工程的调整或者 sdk 接入等等
     // 2. create 里还包含了脚本加密，为了给用户预留能在 onAfterBuildAssets 修改脚本的时序，需要在 onAfterBuildAssets 钩子之后再执行
     // 3. 在 create 之前要准备几乎所有的项目工程文件，包括 main.js
-    const packTools = await nativePackToolMg.create(options.cocosParams);
-    options.packages[options.platform].projectDistPath = packTools.paths.nativePrjDir;
-    this.buildExitRes.custom.nativePrjDir = packTools.paths.nativePrjDir;
+    if (!isBundleOnlyBuild(options)) {
+        const packTools = await nativePackToolMg.create(options.cocosParams);
+        options.packages[options.platform].projectDistPath = packTools.paths.nativePrjDir;
+        this.buildExitRes.custom.nativePrjDir = packTools.paths.nativePrjDir;
+    }
     // 加密后再更改 remote 目录，否则 remote 目录可能会没有加密到
     const server = options.server || '';
     const remoteDir = resolve(result.paths.dir, '../remote');
@@ -299,12 +316,17 @@ export async function onAfterCompressSettings(this: IBuilder, options: ITaskOpti
  * @param result
  */
 export async function onAfterBuild(this: IBuilder, options: ITaskOption, result: InternalBuildResult) {
+    if (isBundleOnlyBuild(options)) {
+        console.log(`[bundle-only] ${options.platform}: native project generation skipped; scripts/assets ready.`);
+        return;
+    }
     const tool = await nativePackToolMg.generate(options.cocosParams);
     this.buildExitRes.custom.nativePrjDir = tool.paths.nativePrjDir;
 
 }
 
 export async function onBeforeMake(this: IBuildStageTask, root: string, options: ITaskOption) {
+    if (isBundleOnlyBuild(options)) throw new Error('Native make/run is unavailable in Bundle-only mode.');
     if (options.cocosParams) {
         return;
     }
@@ -328,6 +350,7 @@ export async function onBeforeMake(this: IBuildStageTask, root: string, options:
  * @param options
  */
 export async function make(this: IBuildStageTask, root: string, options: ITaskOption) {
+    if (isBundleOnlyBuild(options)) throw new Error('Native make/run is unavailable in Bundle-only mode.');
     const tool = await nativePackToolMg.make(options.cocosParams);
     this.buildExitRes.custom.nativePrjDir = tool.paths.nativePrjDir;
     this.buildExitRes.custom.executableFile = await tool.getExecutableFile();
@@ -339,5 +362,6 @@ export async function make(this: IBuildStageTask, root: string, options: ITaskOp
  * @param options
  */
 export async function run(root: string, options: ITaskOption) {
+    if (isBundleOnlyBuild(options)) throw new Error('Native make/run is unavailable in Bundle-only mode.');
     await nativePackToolMg.run(options.cocosParams);
 }
