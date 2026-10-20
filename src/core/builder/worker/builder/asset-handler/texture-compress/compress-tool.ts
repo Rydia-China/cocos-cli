@@ -49,7 +49,7 @@ export async function compressWebp(option: ICompressConfig) {
     // 工具可能不会自动生成输出目录文件夹
     ensureDirSync(dirname(dest));
     console.debug('start compress webp', src, dest, format);
-    let webpTool = Path.join(GlobalPaths.staticDir, 'tools/libwebp_darwin/bin/cwebp');
+    let webpTool = Path.join(GlobalPaths.staticDir, `tools/libwebp_${process.platform}/bin/cwebp`);
     if (process.platform === 'win32') {
         webpTool = Path.join(GlobalPaths.staticDir, 'tools/libwebp_win32/bin/cwebp.exe');
     }
@@ -80,7 +80,7 @@ export async function compressPVR(option: ICompressConfig) {
     // https://github.com/cocos/cocos-editor/pull/1046
     // PVR 升级的已知问题：ios 上似乎会出现渲染效果异常？？暂不确定
     // https://docs.imgtec.com/tools-manuals/pvrtextool-manual/html/topics/cli/command-line-options.html#encode-format-desc
-    let pvrTool = Path.join(GlobalPaths.staticDir, 'tools/PVRTexTool_darwin/PVRTexToolCLI');
+    let pvrTool = Path.join(GlobalPaths.staticDir, `tools/PVRTexTool_${process.platform}/PVRTexToolCLI`);
     if (process.platform === 'win32') {
         pvrTool = Path.join(GlobalPaths.staticDir, 'tools/PVRTexTool_win32/PVRTexToolCLI.exe');
     }
@@ -168,7 +168,7 @@ export async function compressEtc(option: ICompressConfig) {
         src = tempDest;
     }
 
-    let etcTool = Path.join(GlobalPaths.staticDir, 'tools/mali_darwin/etcpack');
+    let etcTool = Path.join(GlobalPaths.staticDir, `tools/mali_${process.platform}/etcpack`);
     if (process.platform === 'win32') {
         etcTool = Path.join(GlobalPaths.staticDir, 'tools/mali_win32/etcpack.exe');
     }
