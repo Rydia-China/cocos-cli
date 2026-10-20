@@ -99,6 +99,10 @@ async function ensureEngineBuild(engineConfig) {
     } else if (fs.existsSync(engineNodeModules) && fs.existsSync(declarationFile) && fs.existsSync(nativePackTool)) {
         console.log('Engine npm install outputs already exist; skipping npm install.');
     } else {
+        if (process.env.LUNAVERSE_BUILD_RUNNER_OFFICIAL_REGISTRY === '1') {
+            normalizeRegistryLock(path.join(engineDir, 'package-lock.json'));
+            normalizeRegistryLock(path.join(engineDir, 'scripts/native-pack-tool/package-lock.json'));
+        }
         runNpm(['install'], { cwd: engineDir });
     }
 
@@ -229,7 +233,7 @@ function shortCommit(commit) {
 
 function runNpm(npmArgs, options) {
     const env = { ...process.env };
-    const macosSdk = runCaptureOrEmpty('xcrun', ['--sdk', 'macosx', '--show-sdk-path']);
+    const macosSdk = process.platform === 'darwin' ? runCaptureOrEmpty('xcrun', ['--sdk', 'macosx', '--show-sdk-path']) : '';
     if (macosSdk) {
         env.SDKROOT = macosSdk.trim();
     } else {
@@ -282,4 +286,18 @@ function runCaptureOrEmpty(command, commandArgs, options = {}) {
     } catch {
         return '';
     }
+}
+
+// Preserve locked versions and integrity while replacing mirror-only tarball URL layouts.
+function normalizeRegistryLock(lockPath) {
+    if (!fs.existsSync(lockPath)) return;
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    for (const [location, entry] of Object.entries(lock.packages || {})) {
+        if (!entry.resolved || !entry.version || !/^https:\/\/(?:registry\.(?:npmmirror\.com|npm\.taobao\.org|npmjs\.org))\//.test(entry.resolved)) continue;
+        const name = location.split('node_modules/').pop();
+        if (!name) continue;
+        const basename = name.split('/').pop();
+        entry.resolved = `https://registry.npmjs.org/${name}/-/${basename}-${entry.version}.tgz`;
+    }
+    fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
 }
